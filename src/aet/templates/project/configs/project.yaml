@@ -1,0 +1,3 @@
+project: myproject
+suite: default
+tracking_mode: local

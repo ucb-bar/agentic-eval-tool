@@ -1,0 +1,3 @@
+project: mytarget
+suite: targetgen
+tracking_mode: local

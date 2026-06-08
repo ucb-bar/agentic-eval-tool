@@ -1,0 +1,7 @@
+runs/*/
+reports/*/metrics.csv
+datasets/gemmini/source_snapshot/*
+!datasets/gemmini/source_snapshot/.gitkeep
+generated/
+*.pyc
+__pycache__/

@@ -1,0 +1,30 @@
+Metadata-Version: 2.4
+Name: aet
+Version: 0.1.0
+Summary: Agentic Eval Tool — reusable research evaluation harness for compiler, runtime, and agentic code-generation experiments
+License: Apache-2.0
+Requires-Python: >=3.11
+License-File: LICENSE
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: tracking
+Requires-Dist: mlflow>=2.20; extra == "tracking"
+Requires-Dist: opentelemetry-api>=1.20; extra == "tracking"
+Requires-Dist: opentelemetry-sdk>=1.20; extra == "tracking"
+Requires-Dist: opentelemetry-exporter-otlp-proto-http>=1.20; extra == "tracking"
+Requires-Dist: jsonschema>=4.0; extra == "tracking"
+Provides-Extra: ray
+Requires-Dist: ray[default]>=2.40; extra == "ray"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: jsonschema>=4.0; extra == "dev"
+Provides-Extra: all
+Requires-Dist: mlflow>=2.20; extra == "all"
+Requires-Dist: opentelemetry-api>=1.20; extra == "all"
+Requires-Dist: opentelemetry-sdk>=1.20; extra == "all"
+Requires-Dist: opentelemetry-exporter-otlp-proto-http>=1.20; extra == "all"
+Requires-Dist: jsonschema>=4.0; extra == "all"
+Requires-Dist: ray[default]>=2.40; extra == "all"
+Requires-Dist: pytest>=8.0; extra == "all"
+Requires-Dist: ruff; extra == "all"
+Dynamic: license-file
