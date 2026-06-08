@@ -1,2 +1,0 @@
-[console_scripts]
-aet = aet.cli.main:main
