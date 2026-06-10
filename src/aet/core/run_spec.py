@@ -24,3 +24,11 @@ class RunSpec:
     experiment_name: str | None = None
     otel_endpoint: str | None = None
     extra: dict = field(default_factory=dict)
+    # Hardware benchmark extensions
+    benchmark: str | None = None
+    variant: str | None = None
+    tool_tier: str | None = None
+    spec_version_hash: str | None = None
+    tb_version_hash: str | None = None
+    repo_initial_commit: str | None = None
+    repo_final_commit: str | None = None

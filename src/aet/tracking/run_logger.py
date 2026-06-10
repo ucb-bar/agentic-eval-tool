@@ -447,6 +447,289 @@ class EvalRunLogger:
         return None
 
     # ------------------------------------------------------------------
+    # Hardware benchmark / event-sourced trace methods
+
+    def log_run_start(
+        self,
+        benchmark: str = "",
+        variant: str = "",
+        spec_version_hash: str = "",
+        tb_version_hash: str = "",
+        repo_initial_commit: str = "",
+        tool_tier: str = "",
+    ) -> None:
+        self._local._log_event_rich("run.start", {
+            "benchmark": benchmark,
+            "variant": variant,
+            "spec_version_hash": spec_version_hash,
+            "tb_version_hash": tb_version_hash,
+            "repo_initial_commit": repo_initial_commit,
+            "tool_tier": tool_tier,
+        }, stage="setup", actor="harness")
+
+    def log_run_end(
+        self,
+        status: str,
+        repo_final_commit: str = "",
+        wall_time_s: float = 0.0,
+    ) -> None:
+        self._local._log_event_rich("run.end", {
+            "status": status,
+            "repo_final_commit": repo_final_commit,
+            "wall_time_s": wall_time_s,
+        }, stage="teardown", actor="harness")
+        self._local.log_metric("run.wall_time_s", wall_time_s)
+
+    def log_run_abort(self, reason: str, detail: str = "") -> None:
+        self._local._log_event_rich("run.abort", {
+            "reason": reason, "detail": detail,
+        }, stage="teardown", actor="harness")
+
+    def log_prompt_sent(
+        self,
+        prompt_path: str,
+        prompt_hash: str = "",
+        stage: str = "dispatch",
+    ) -> str:
+        """Emit prompt.sent event. Returns the event_id."""
+        return self._local._log_event_rich("prompt.sent", {
+            "prompt_path": prompt_path,
+            "prompt_hash": prompt_hash,
+        }, stage=stage, actor="harness", output_refs=[prompt_path])
+
+    def log_llm_response(
+        self,
+        model: str,
+        turn: int,
+        tok_in: int,
+        tok_out: int,
+        tok_cached: int = 0,
+        finish_reason: str = "",
+        prompt_event_id: str | None = None,
+    ) -> str:
+        """Emit llm.response event. Returns the event_id."""
+        return self._local._log_event_rich("llm.response", {
+            "model": model,
+            "turn": turn,
+            "tok_in": tok_in,
+            "tok_out": tok_out,
+            "tok_cached": tok_cached,
+            "finish_reason": finish_reason,
+        }, stage="inference", actor=model,
+        input_refs=[prompt_event_id] if prompt_event_id else None)
+
+    def log_file_diff(
+        self,
+        path: str,
+        op: str,
+        sha256_before: str | None = None,
+        sha256_after: str | None = None,
+        iteration: int | None = None,
+    ) -> None:
+        """Emit file.diff event for agent file writes/edits/reads."""
+        self._local._log_event_rich("file.diff", {
+            "path": path,
+            "op": op,
+            "sha256_before": sha256_before,
+            "sha256_after": sha256_after,
+            "iteration": iteration,
+        }, stage="agent_action", actor="agent")
+
+    def log_tool_start(
+        self,
+        tool_name: str,
+        tool_use_id: str,
+        input_summary: str = "",
+        turn: int = 0,
+    ) -> None:
+        self._local._log_event_rich("tool.start", {
+            "tool": tool_name,
+            "tool_use_id": tool_use_id,
+            "input": input_summary[:300],
+            "turn": turn,
+        }, stage="agent_action", actor="agent")
+
+    def log_tool_end(
+        self,
+        tool_name: str,
+        tool_use_id: str,
+        result_summary: str = "",
+        is_error: bool = False,
+        duration_s: float = 0.0,
+    ) -> None:
+        self._local._log_event_rich("tool.end", {
+            "tool": tool_name,
+            "tool_use_id": tool_use_id,
+            "result": result_summary[:300],
+            "is_error": is_error,
+            "duration_s": duration_s,
+        }, stage="agent_action", actor="agent")
+
+    def log_tool_error(
+        self,
+        tool_name: str,
+        tool_use_id: str,
+        error_message: str,
+    ) -> None:
+        self._local._log_event_rich("tool.error", {
+            "tool": tool_name,
+            "tool_use_id": tool_use_id,
+            "error": error_message[:500],
+        }, stage="agent_action", actor="agent")
+
+    def log_artifact_created(
+        self,
+        path: str,
+        sha256: str | None,
+        origin: str,
+        size_bytes: int | None = None,
+        protected: bool = False,
+    ) -> None:
+        self._local._log_event_rich("artifact.created", {
+            "path": path,
+            "sha256": sha256,
+            "origin": origin,
+            "size_bytes": size_bytes,
+            "protected": protected,
+        }, stage="artifact", actor="harness", output_refs=[path])
+
+    def log_eval_test_result(
+        self,
+        test_name: str,
+        passed: bool,
+        iteration: int | None = None,
+        failure_category: str | None = None,
+        failure_detail: str = "",
+        oracle_output: str = "",
+    ) -> None:
+        self._local._log_event_rich("eval.test_result", {
+            "test_name": test_name,
+            "passed": passed,
+            "iteration": iteration,
+            "failure_category": failure_category,
+            "failure_detail": failure_detail[:500],
+            "oracle_output": oracle_output[:1000],
+        }, stage="eval", actor="oracle")
+        self._local.log_metric(f"eval.{test_name}.passed", int(passed), step=iteration)
+
+    def log_eval_score(
+        self,
+        testbench_pass: bool,
+        localization_recall: float,
+        localization_precision: float,
+        regression_count: int = 0,
+        tainted: bool = False,
+        first_elaboration_iter: int | None = None,
+        first_public_pass_iter: int | None = None,
+    ) -> None:
+        self._local._log_event_rich("eval.score", {
+            "testbench_pass": testbench_pass,
+            "localization_recall": localization_recall,
+            "localization_precision": localization_precision,
+            "regression_count": regression_count,
+            "tainted": tainted,
+            "first_elaboration_iter": first_elaboration_iter,
+            "first_public_pass_iter": first_public_pass_iter,
+        }, stage="eval", actor="harness")
+        self._local.log_metric("hw.testbench_pass", int(testbench_pass))
+        self._local.log_metric("hw.localization_recall", localization_recall)
+        self._local.log_metric("hw.localization_precision", localization_precision)
+        self._local.log_metric("hw.regression_count", regression_count)
+        if first_elaboration_iter is not None:
+            self._local.log_metric("hw.first_elaboration_iter", first_elaboration_iter)
+        if first_public_pass_iter is not None:
+            self._local.log_metric("hw.first_public_pass_iter", first_public_pass_iter)
+
+    def log_synth_end(
+        self,
+        status: str,
+        iteration: int | None = None,
+        verilator_output: str = "",
+        failure_category: str | None = None,
+    ) -> None:
+        self._local._log_event_rich("synth.end", {
+            "status": status,
+            "iteration": iteration,
+            "verilator_output": verilator_output[:2000],
+            "failure_category": failure_category,
+        }, stage="eval", actor="oracle")
+
+    def log_human_intervention(self, reason: str, detail: str = "") -> None:
+        self._local._log_event_rich("human.intervention", {
+            "reason": reason, "detail": detail,
+        }, stage="human", actor="human")
+
+    # ------------------------------------------------------------------
+    # Milestone helpers
+
+    def record_elaboration(self, iteration: int) -> None:
+        """Mark the first iteration at which Verilator compile succeeded."""
+        self._local._log_event_rich("eval.milestone", {
+            "milestone": "first_elaboration", "iteration": iteration,
+        }, stage="eval", actor="oracle")
+        self._local.log_metric("hw.first_elaboration_iter", iteration)
+
+    def record_public_pass(self, iteration: int) -> None:
+        """Mark the first iteration at which the public testbench passed."""
+        self._local._log_event_rich("eval.milestone", {
+            "milestone": "first_public_pass", "iteration": iteration,
+        }, stage="eval", actor="oracle")
+        self._local.log_metric("hw.first_public_pass_iter", iteration)
+
+    def record_regression(self, iteration: int, detail: str = "") -> None:
+        """Increment regression counter (a previously passing run broke)."""
+        self._local._log_event_rich("eval.regression", {
+            "iteration": iteration, "detail": detail,
+        }, stage="eval", actor="oracle")
+
+    # ------------------------------------------------------------------
+    # Utility writers
+
+    def write_run_record(self, extra: dict | None = None) -> Path:
+        """Write run_record.json to the run_path root. Returns the path."""
+        from datetime import datetime, timezone
+        run_path = self._config.run_path
+        run_path.mkdir(parents=True, exist_ok=True)
+        record: dict = {
+            "schema_version": "1.1",
+            "run_id": self._config.run_id,
+            "project": self._config.project,
+            "suite": self._config.suite,
+            "target": self._config.target,
+            "method": self._config.method,
+            "seed": self._config.seed,
+            "tracking_mode": self._config.mode,
+            "created_at": datetime.now(tz=timezone.utc).isoformat(),
+        }
+        if extra:
+            record.update(extra)
+        import json
+        path = run_path / "run_record.json"
+        path.write_text(json.dumps(record, indent=2, default=str))
+        return path
+
+    def write_summary_metrics(self, extra: dict | None = None) -> Path:
+        """Write metrics/summary_metrics.json. Returns the path."""
+        from datetime import datetime, timezone
+        import json
+        metrics_dir = self._config.run_path / "metrics"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        summary: dict = {
+            "run_id": self._config.run_id,
+            "project": self._config.project,
+            "suite": self._config.suite,
+            "method": self._config.method,
+            "seed": self._config.seed,
+            "target": self._config.target,
+            "recorded_at": datetime.now(tz=timezone.utc).isoformat(),
+        }
+        if extra:
+            summary.update(extra)
+        path = metrics_dir / "summary_metrics.json"
+        path.write_text(json.dumps(summary, indent=2, default=str))
+        return path
+
+    # ------------------------------------------------------------------
     def finish(self, status: str, message: str | None = None) -> None:
         self._local.log_event("run.finished", {"status": status, "message": message})
         if self._mlflow:
