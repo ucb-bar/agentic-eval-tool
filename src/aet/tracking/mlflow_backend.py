@@ -39,7 +39,7 @@ class MLflowBackend:
             self._mlflow.set_tracking_uri(uri)
             exp_name = config.experiment_name or f"targetgen-evals-{config.target}"
             self._mlflow.set_experiment(exp_name)
-            self._run = self._mlflow.start_run(
+            run_kwargs: dict = dict(
                 run_name=config.run_id,
                 tags={
                     "target": config.target,
@@ -48,6 +48,9 @@ class MLflowBackend:
                     "tracking_mode": config.mode,
                 },
             )
+            if config.parent_run_id:
+                run_kwargs["parent_run_id"] = config.parent_run_id
+            self._run = self._mlflow.start_run(**run_kwargs)
             self._enabled = True
             mlflow_run_id = self._run.info.run_id
             local.log_param("mlflow_run_id", mlflow_run_id)
@@ -111,6 +114,14 @@ class MLflowBackend:
             self._mlflow.log_metrics(numeric)
         except Exception as e:
             self._local.warn(f"MLflow log_metrics failed: {e}")
+
+    def log_step_metric(self, name: str, value: float, step: int) -> None:
+        if not self._enabled:
+            return
+        try:
+            self._mlflow.log_metric(name, float(value), step=step)
+        except Exception as e:
+            self._local.warn(f"MLflow log_step_metric({name}) failed: {e}")
 
     # ------------------------------------------------------------------
     def log_artifact(self, path: Path, artifact_path: str | None = None) -> None:

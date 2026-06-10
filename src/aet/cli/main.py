@@ -105,7 +105,7 @@ def _cmd_init_project(args) -> None:
 # init-run helpers and command
 # ---------------------------------------------------------------------------
 
-def _do_init_run(args, method: str, seed: int) -> Path:
+def _do_init_run(args, method: str, seed: int, parent_run_id: str | None = None) -> Path:
     """Core init-run logic. Returns the run_path created."""
     project_root = _resolve_project_root(args)
 
@@ -167,6 +167,7 @@ def _do_init_run(args, method: str, seed: int) -> Path:
         mlflow_tracking_uri=args.mlflow_tracking_uri,
         experiment_name=args.experiment_name,
         otel_endpoint=args.otel_endpoint,
+        parent_run_id=parent_run_id,
     )
 
     suite = get_suite(args.suite)
@@ -186,7 +187,7 @@ def _cmd_init_run(args) -> None:
 # validate helpers and command
 # ---------------------------------------------------------------------------
 
-def _do_validate(run_path: Path, args) -> dict:
+def _do_validate(run_path: Path, args, parent_run_id: str | None = None) -> dict:
     """Core validate logic. Returns the validation report dict."""
     project_root = _resolve_project_root(args)
 
@@ -226,6 +227,7 @@ def _do_validate(run_path: Path, args) -> dict:
         mlflow_tracking_uri=args.mlflow_tracking_uri,
         experiment_name=args.experiment_name,
         otel_endpoint=args.otel_endpoint,
+        parent_run_id=parent_run_id,
     )
 
     suite = get_suite(manifest.suite)
@@ -311,19 +313,42 @@ def _cmd_run_suite(args) -> None:
     methods = [m.strip() for m in args.methods.split(",")]
     seeds = [int(s.strip()) for s in args.seeds.split(",")]
     combos = [(method, seed) for method in methods for seed in seeds]
+    project_root = _resolve_project_root(args)
+
+    # Create a sweep-level parent run in MLflow so all child runs nest under it.
+    sweep_run_id = f"sweep_{date.today().isoformat()}"
+    sweep_run_path = project_root / "runs" / args.suite / "_sweep"
+    sweep_run_path.mkdir(parents=True, exist_ok=True)
+    sweep_logger = EvalRunLogger.start(
+        project=project_root.name,
+        suite=args.suite,
+        target=getattr(args, "target", None) or "",
+        method="sweep",
+        seed=0,
+        run_id=sweep_run_id,
+        run_path=sweep_run_path,
+        tracking_mode=args.tracking_mode,
+        mlflow_tracking_uri=args.mlflow_tracking_uri,
+        experiment_name=args.experiment_name,
+        otel_endpoint=args.otel_endpoint,
+    )
+    sweep_parent_id = sweep_logger.mlflow_run_id
+    if sweep_parent_id:
+        print(f"[aet] sweep parent run: {sweep_parent_id}")
 
     run_paths: list[Path] = []
     for method, seed in combos:
         print(f"[aet] init-run: suite={args.suite} method={method} seed={seed}")
-        run_path = _do_init_run(args, method=method, seed=seed)
+        run_path = _do_init_run(args, method=method, seed=seed, parent_run_id=sweep_parent_id)
         run_paths.append(run_path)
 
         print(f"[aet] validate: {run_path}")
-        report = _do_validate(run_path, args)
+        report = _do_validate(run_path, args, parent_run_id=sweep_parent_id)
         status = report.get("overall") or report.get("status") or "unknown"
         total_errors = report.get("total_errors", len(report.get("errors", [])))
         print(f"  status={status}, total_errors={total_errors}")
 
+    sweep_logger.finish(status="sweep_complete")
     print(f"[aet] All {len(combos)} run(s) complete. Running compare...")
     _cmd_compare(args)
 

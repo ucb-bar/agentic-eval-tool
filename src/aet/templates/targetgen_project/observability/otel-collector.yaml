@@ -32,9 +32,12 @@ exporters:
     endpoint: 0.0.0.0:8889
     namespace: aet
 
-  # --- SigNoz (self-hosted) ---
+  # --- SigNoz fan-out (only relevant if running this collector alongside SigNoz) ---
+  # Uncomment and add to exporters lists below if you want a single collector
+  # that fans out to both Jaeger AND SigNoz simultaneously.
+  # When using SigNoz exclusively, skip this file and point aet at port 4318 directly.
   # otlp/signoz:
-  #   endpoint: http://signoz-otel-collector:4317
+  #   endpoint: http://localhost:4317   # SigNoz OTel collector port
   #   tls:
   #     insecure: true
 

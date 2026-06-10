@@ -50,6 +50,7 @@ class EvalRunLogger:
         mlflow_tracking_uri: str | None = None,
         experiment_name: str | None = None,
         otel_endpoint: str | None = None,
+        parent_run_id: str | None = None,
     ) -> "EvalRunLogger":
         if tracking_mode not in TRACKING_MODES:
             tracking_mode = "local"
@@ -65,6 +66,7 @@ class EvalRunLogger:
             mlflow_tracking_uri=mlflow_tracking_uri,
             experiment_name=experiment_name,
             otel_endpoint=otel_endpoint,
+            parent_run_id=parent_run_id,
         )
         return cls(config)
 
@@ -95,6 +97,12 @@ class EvalRunLogger:
         self._local.log_metrics(metrics, prefix=prefix)
         if self._mlflow:
             self._mlflow.log_metrics(metrics, prefix=prefix)
+
+    def log_metric_step(self, name: str, value: float, step: int) -> None:
+        """Log a metric at a specific step (for convergence curves)."""
+        self._local.log_metric(name, value, step=step)
+        if self._mlflow:
+            self._mlflow.log_step_metric(name, value, step)
 
     # ------------------------------------------------------------------
     def log_event(self, name: str, payload: dict | None = None) -> None:
@@ -189,6 +197,14 @@ class EvalRunLogger:
     @property
     def mlflow_run_id(self) -> str | None:
         return self._mlflow.run_id if self._mlflow else None
+
+    @property
+    def mlflow_run_url(self) -> str | None:
+        run_id = self.mlflow_run_id
+        if not run_id:
+            return None
+        uri = (self._config.mlflow_tracking_uri or "http://localhost:5000").rstrip("/")
+        return f"{uri}/#/experiments/0/runs/{run_id}"
 
     @property
     def otel_trace_id(self) -> str | None:

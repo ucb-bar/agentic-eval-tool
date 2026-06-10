@@ -25,3 +25,4 @@ class TrackingConfig:
     service_name: str = "aet"
     enable_openllmetry: bool = True
     claude_code_trace_parent: str | None = None
+    parent_run_id: str | None = None

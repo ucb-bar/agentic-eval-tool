@@ -70,7 +70,7 @@ class TargetGenSuite(EvalSuite):
         project_root = spec.project_root if spec.project_root != Path() else paths.run_path.parent.parent.parent
 
         import inspect
-        for name, module in _VALIDATOR_MAP.items():
+        for i, (name, module) in enumerate(_VALIDATOR_MAP.items()):
             span_cm = (
                 logger.start_tool_span(f"validate_{name}", validator_name=name)
                 if logger else nullcontext()
@@ -88,6 +88,9 @@ class TargetGenSuite(EvalSuite):
                     if result.get("warnings"):
                         report["total_warnings"] += len(result.get("warnings", []))
                     if logger:
+                        passed = len(result.get("errors", [])) == 0
+                        logger.log_metric_step(f"validator.{name}.passed", 1.0 if passed else 0.0, step=i)
+                        logger.log_metric_step("cumulative_errors", float(report["total_errors"]), step=i)
                         logger.log_event(f"validation.{name}.completed", {
                             "errors": result.get("errors", []),
                             "warnings": result.get("warnings", []),
@@ -96,6 +99,8 @@ class TargetGenSuite(EvalSuite):
                     report["validators"][name] = {"errors": [str(exc)], "warnings": []}
                     report["total_errors"] += 1
                     if logger:
+                        logger.log_metric_step(f"validator.{name}.passed", 0.0, step=i)
+                        logger.log_metric_step("cumulative_errors", float(report["total_errors"]), step=i)
                         logger.log_event(f"validation.{name}.error", {"error": str(exc)})
 
         if report["total_errors"] > 0:

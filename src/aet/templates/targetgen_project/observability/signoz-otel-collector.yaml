@@ -1,0 +1,46 @@
+# SigNoz OTel Collector config.
+# Used by docker-compose.signoz.yml — do not use with docker-compose.observability.yml.
+#
+# This collector writes traces and metrics directly to ClickHouse via SigNoz exporters.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    send_batch_size: 10000
+    timeout: 1s
+  # Auto-derive RED metrics (rate, error, duration) from spans
+  signozspanmetrics/cumulative:
+    metrics_exporter: signozclickhousemetrics
+    latency_histogram_buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+    dimensions:
+      - name: gen_ai.operation.name
+      - name: gen_ai.provider.name
+      - name: aet.suite
+      - name: aet.method
+      - name: aet.validator.name
+
+exporters:
+  clickhousetraces:
+    datasource: tcp://admin:27ff0399-0d3a-4bd8-919d-17c2181e6fb9@clickhouse:9000/signoz_traces
+    docker_multi_node_cluster: false
+    low_cardinal_exception_grouping: false
+  signozclickhousemetrics:
+    datasource: tcp://admin:27ff0399-0d3a-4bd8-919d-17c2181e6fb9@clickhouse:9000/signoz_metrics
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [signozspanmetrics/cumulative, batch]
+      exporters: [clickhousetraces]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [signozclickhousemetrics]
