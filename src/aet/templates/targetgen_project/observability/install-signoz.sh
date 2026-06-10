@@ -24,8 +24,8 @@ cd signoz-install/deploy
 sudo ./install.sh
 
 echo ""
-echo "SigNoz installed. Open http://localhost:3301 in your browser."
-echo "Default credentials: admin@example.com / password"
+echo "SigNoz installed. Open http://localhost:8080 in your browser."
+echo "Complete first-time setup to create your admin account."
 echo ""
 echo "Run aet with SigNoz tracing:"
 echo "  aet run-suite --tracking full --otel-endpoint http://localhost:4318 <...>"

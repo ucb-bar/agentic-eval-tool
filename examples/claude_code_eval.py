@@ -241,7 +241,7 @@ def _print_summary(
     if trace_id := logger.otel_trace_id:
         print(f"       trace:   {trace_id}")
         if otel_endpoint and "localhost" in otel_endpoint:
-            print("       signoz:  http://localhost:3301  →  Services  →  aet")
+            print("       signoz:  http://localhost:8080  →  Services  →  aet")
 
 
 def _parse_args() -> argparse.Namespace:

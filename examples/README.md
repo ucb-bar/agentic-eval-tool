@@ -21,7 +21,7 @@ Start SigNoz once (requires Docker):
 
 ```bash
 bash src/aet/templates/targetgen_project/observability/install-signoz.sh
-# wait ~30s for ClickHouse + schema migration, then open http://localhost:3301
+# wait ~30s for ClickHouse + schema migration, then open http://localhost:8080
 ```
 
 Run with tracing:
@@ -33,7 +33,7 @@ python examples/claude_code_eval.py \
     --dry-run
 ```
 
-Open SigNoz → **Services** → `aet` → find the trace.
+Open SigNoz at `http://localhost:8080` → **Services** → `aet` → find the trace.
 Drill into: `invoke_workflow` → `invoke_agent(claude-code)` → `execute_tool(validate)`.
 
 The `gen_ai.*` attributes and `gen_ai.evaluation.result` event appear in the span detail pane.
