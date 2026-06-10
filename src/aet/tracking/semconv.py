@@ -45,10 +45,37 @@ GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id"
 
 # ── Agentic ──────────────────────────────────────────────────────────────────
 GEN_AI_AGENT_NAME = "gen_ai.agent.name"
+GEN_AI_AGENT_ID = "gen_ai.agent.id"
+GEN_AI_AGENT_VERSION = "gen_ai.agent.version"
+GEN_AI_AGENT_DESCRIPTION = "gen_ai.agent.description"
 GEN_AI_WORKFLOW_NAME = "gen_ai.workflow.name"
 GEN_AI_TOOL_NAME = "gen_ai.tool.name"
 GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
 GEN_AI_TOOL_IS_ERROR = "gen_ai.tool.is_error"
+GEN_AI_TOOL_TYPE = "gen_ai.tool.type"
+GEN_AI_TOOL_DESCRIPTION = "gen_ai.tool.description"
+GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
+GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
+GEN_AI_DATA_SOURCE_ID = "gen_ai.data_source.id"
+
+# ── Token type values ─────────────────────────────────────────────────────────
+GEN_AI_TOKEN_TYPE = "gen_ai.token.type"
+TOKEN_TYPE_INPUT = "input"
+TOKEN_TYPE_OUTPUT = "output"
+TOKEN_TYPE_CACHE_READ = "cache_read"
+TOKEN_TYPE_CACHE_CREATION = "cache_creation"
+
+# ── Provider name values ──────────────────────────────────────────────────────
+PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_OPENAI = "openai"
+PROVIDER_AWS_BEDROCK = "aws.bedrock"
+PROVIDER_AZURE_OPENAI = "azure.ai.openai"
+PROVIDER_GCP_VERTEX = "gcp.vertex_ai"
+
+# ── Server ────────────────────────────────────────────────────────────────────
+SERVER_ADDRESS_ANTHROPIC = "api.anthropic.com"
+SERVER_ADDRESS_OPENAI = "api.openai.com"
+SERVER_ADDRESS_BEDROCK = "bedrock-runtime.{region}.amazonaws.com"
 
 # ── Content (opt-in — may contain sensitive data) ────────────────────────────
 GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
@@ -60,13 +87,22 @@ GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
 GEN_AI_EVAL_NAME = "gen_ai.evaluation.name"
 GEN_AI_EVAL_SCORE_VALUE = "gen_ai.evaluation.score.value"
 GEN_AI_EVAL_SCORE_LABEL = "gen_ai.evaluation.score.label"
+GEN_AI_EVAL_EXPLANATION = "gen_ai.evaluation.explanation"
 
 # ── Event names ──────────────────────────────────────────────────────────────
 GEN_AI_EVAL_RESULT_EVENT = "gen_ai.evaluation.result"
+GEN_AI_INFERENCE_DETAILS_EVENT = "gen_ai.client.inference.operation.details"
+GEN_AI_OPERATION_EXCEPTION_EVENT = "gen_ai.client.operation.exception"
 GEN_AI_USER_MESSAGE_EVENT = "gen_ai.user.message"
 GEN_AI_ASSISTANT_MESSAGE_EVENT = "gen_ai.assistant.message"
 GEN_AI_TOOL_CALL_EVENT = "gen_ai.tool.call"
 GEN_AI_SYSTEM_EVENT = "gen_ai.system"
+
+# ── Metric names ──────────────────────────────────────────────────────────────
+METRIC_TOKEN_USAGE = "gen_ai.client.token.usage"
+METRIC_OPERATION_DURATION = "gen_ai.client.operation.duration"
+METRIC_TIME_TO_FIRST_CHUNK = "gen_ai.client.operation.time_to_first_chunk"
+METRIC_TIME_PER_OUTPUT_CHUNK = "gen_ai.client.operation.time_per_output_chunk"
 
 # ── Operation name values ─────────────────────────────────────────────────────
 OP_INVOKE_WORKFLOW = "invoke_workflow"

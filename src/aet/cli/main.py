@@ -354,6 +354,305 @@ def _cmd_run_suite(args) -> None:
 
 
 # ---------------------------------------------------------------------------
+# baseline
+# ---------------------------------------------------------------------------
+
+def _baseline_dir(project_root: Path, suite: str) -> Path:
+    return project_root / "baselines" / suite
+
+
+def _cmd_baseline_set(args) -> None:
+    import json as _json
+    project_root = _resolve_project_root(args)
+    suite = args.suite
+    baseline_path = _baseline_dir(project_root, suite) / "baseline.json"
+
+    runs_root = project_root / "runs" / suite
+    if not runs_root.exists():
+        print(f"[aet] Error: no runs directory for suite {suite}: {runs_root}", file=sys.stderr)
+        sys.exit(1)
+
+    if getattr(args, "run_id", None):
+        run_dir = runs_root / args.run_id
+        summary_path = run_dir / "metrics" / "summary_metrics.json"
+        if not summary_path.exists():
+            print(f"[aet] Error: summary_metrics.json not found at {summary_path}", file=sys.stderr)
+            sys.exit(1)
+        summary = _json.loads(summary_path.read_text())
+    else:
+        best_summary = None
+        best_score = float("-inf")
+        for run_dir in runs_root.iterdir():
+            if not run_dir.is_dir():
+                continue
+            sp = run_dir / "metrics" / "summary_metrics.json"
+            if not sp.exists():
+                continue
+            try:
+                s = _json.loads(sp.read_text())
+                score = s.get("task_achievement_score")
+                if score is not None and float(score) > best_score:
+                    best_score = float(score)
+                    best_summary = s
+            except Exception:
+                pass
+        if best_summary is None:
+            print(f"[aet] Error: no valid runs found for suite {suite}", file=sys.stderr)
+            sys.exit(1)
+        summary = best_summary
+
+    baseline_path.parent.mkdir(parents=True, exist_ok=True)
+    baseline_path.write_text(_json.dumps(summary, indent=2))
+    print(f"[aet] Baseline set: {baseline_path}")
+
+
+def _cmd_baseline_show(args) -> None:
+    import json as _json
+    project_root = _resolve_project_root(args)
+    suite = args.suite
+    baseline_path = _baseline_dir(project_root, suite) / "baseline.json"
+    if not baseline_path.exists():
+        print(f"[aet] No baseline found for suite {suite} at {baseline_path}", file=sys.stderr)
+        sys.exit(1)
+    print(baseline_path.read_text())
+
+
+def _cmd_baseline(args) -> None:
+    if not hasattr(args, "baseline_func"):
+        args._baseline_parser.print_help()
+        sys.exit(0)
+    args.baseline_func(args)
+
+
+# ---------------------------------------------------------------------------
+# runs  (list all runs under a project)
+# ---------------------------------------------------------------------------
+
+def _cmd_runs(args) -> None:
+    import json
+
+    project_root = _resolve_project_root(args)
+    runs_root = project_root / "runs"
+    suite_filter = getattr(args, "suite", None)
+
+    run_dirs: list[Path] = []
+    if runs_root.exists():
+        for suite_dir in sorted(runs_root.iterdir()):
+            if not suite_dir.is_dir():
+                continue
+            if suite_filter and suite_dir.name != suite_filter:
+                continue
+            for run_dir in sorted(suite_dir.iterdir()):
+                if run_dir.is_dir() and not run_dir.name.startswith("_"):
+                    run_dirs.append(run_dir)
+
+    if not run_dirs:
+        print("[aet] No runs found" + (f" for suite '{suite_filter}'" if suite_filter else "") + ".")
+        return
+
+    fmt = getattr(args, "format", "table")
+
+    rows = []
+    for run_dir in run_dirs:
+        suite = run_dir.parent.name
+        run_id = run_dir.name
+        status = "?"
+        model = ""
+        cost = None
+        turns = None
+        tokens_in = None
+        trace_id = None
+        mlflow_run = None
+
+        report_path = run_dir / "validation_report.json"
+        if report_path.exists():
+            try:
+                r = json.loads(report_path.read_text())
+                status = r.get("status", "?")
+            except Exception:
+                pass
+
+        params_path = run_dir / "logs" / "params.json"
+        if params_path.exists():
+            try:
+                p = json.loads(params_path.read_text())
+                model = p.get("gen_ai.response.model", "")
+                mlflow_run = p.get("mlflow_run_id", "")
+                trace_id = p.get("aet.otel_trace_id", "")
+            except Exception:
+                pass
+
+        metrics_path = run_dir / "logs" / "metrics.jsonl"
+        if metrics_path.exists():
+            try:
+                for line in metrics_path.read_text().splitlines():
+                    m = json.loads(line)
+                    if m["name"] == "aet.agent.cost_usd":
+                        cost = m["value"]
+                    elif m["name"] == "aet.agent.num_turns":
+                        turns = int(m["value"])
+                    elif m["name"] == "gen_ai.usage.input_tokens":
+                        tokens_in = int(m["value"])
+            except Exception:
+                pass
+
+        rows.append({
+            "suite": suite, "run_id": run_id, "status": status,
+            "model": model, "turns": turns, "tokens_in": tokens_in,
+            "cost": cost, "trace_id": trace_id, "mlflow_run": mlflow_run,
+        })
+
+    if fmt == "json":
+        print(json.dumps(rows, indent=2))
+        return
+
+    STATUS_SYM = {"pass": "✓", "partial": "~", "error": "✗", "unknown": "?", "?": "?"}
+    col_w = max(len(r["run_id"]) for r in rows)
+    print(f"\n  {'':2}  {'suite':<14}  {'run_id':<{col_w}}  {'model':<24}  {'turns':>5}  {'tokens_in':>10}  {'cost':>10}")
+    print(f"  {'':2}  {'-'*14}  {'-'*col_w}  {'-'*24}  {'-'*5}  {'-'*10}  {'-'*10}")
+    for r in rows:
+        sym = STATUS_SYM.get(r["status"], "?")
+        cost_s = f"${r['cost']:.4f}" if r["cost"] is not None else "—"
+        turns_s = str(r["turns"]) if r["turns"] is not None else "—"
+        tokens_s = str(r["tokens_in"]) if r["tokens_in"] is not None else "—"
+        model_s = (r["model"] or "—")[:24]
+        print(f"  {sym:<2}  {r['suite']:<14}  {r['run_id']:<{col_w}}  {model_s:<24}  {turns_s:>5}  {tokens_s:>10}  {cost_s:>10}")
+    print()
+
+
+# ---------------------------------------------------------------------------
+# show  (dump all data for a single run)
+# ---------------------------------------------------------------------------
+
+def _cmd_show(args) -> None:
+    import json
+
+    run_path = Path(args.run_path).resolve()
+    if not run_path.exists():
+        print(f"[aet] Run path not found: {run_path}", file=sys.stderr)
+        sys.exit(1)
+
+    fmt = getattr(args, "format", "text")
+
+    # ── load all local data ────────────────────────────────────────────────
+    params: dict = {}
+    params_path = run_path / "logs" / "params.json"
+    if params_path.exists():
+        try:
+            params = json.loads(params_path.read_text())
+        except Exception:
+            pass
+
+    metrics: list[dict] = []
+    metrics_path = run_path / "logs" / "metrics.jsonl"
+    if metrics_path.exists():
+        for line in metrics_path.read_text().splitlines():
+            try:
+                metrics.append(json.loads(line))
+            except Exception:
+                pass
+
+    events: list[dict] = []
+    events_path = run_path / "logs" / "events.jsonl"
+    if events_path.exists():
+        for line in events_path.read_text().splitlines():
+            try:
+                events.append(json.loads(line))
+            except Exception:
+                pass
+
+    report: dict = {}
+    report_path = run_path / "validation_report.json"
+    if report_path.exists():
+        try:
+            report = json.loads(report_path.read_text())
+        except Exception:
+            pass
+
+    if fmt == "json":
+        print(json.dumps({"params": params, "metrics": metrics,
+                          "events": events, "report": report}, indent=2))
+        return
+
+    # ── text display ───────────────────────────────────────────────────────
+    SEP = "─" * 60
+
+    print(f"\n{SEP}")
+    print(f"  Run: {run_path.name}   suite: {run_path.parent.name}")
+    print(SEP)
+
+    # params
+    if params:
+        print("\n  PARAMS")
+        for k, v in params.items():
+            print(f"    {k:<40} {v}")
+
+    # metrics grouped
+    if metrics:
+        print("\n  METRICS")
+        groups: dict[str, list] = {}
+        for m in metrics:
+            cat = m["name"].split(".")[0]
+            groups.setdefault(cat, []).append(m)
+
+        # cost block first
+        for cat in ["aet", "gen_ai", "cost_usd", "input_tokens", "output_tokens",
+                    "cache_read_tokens", "cache_creation_tokens",
+                    "turn", "task_achievement_score", "validation_errors"]:
+            if cat not in groups:
+                continue
+            print(f"\n    [{cat}]")
+            for m in groups.pop(cat):
+                step = f"  step={m['step']}" if m.get("step") is not None else ""
+                val = m["value"]
+                if isinstance(val, float) and "cost" in m["name"]:
+                    val = f"${val:.6f}"
+                print(f"      {m['name']:<52} {val}{step}")
+        for cat, ms in groups.items():
+            print(f"\n    [{cat}]")
+            for m in ms:
+                step = f"  step={m['step']}" if m.get("step") is not None else ""
+                print(f"      {m['name']:<52} {m['value']}{step}")
+
+    # events timeline
+    if events:
+        print("\n  EVENTS")
+        for e in events:
+            ts = e.get("ts", "")[:19].replace("T", " ")
+            print(f"\n    {ts}  {e['event']}")
+            for k, v in (e.get("payload") or {}).items():
+                vs = str(v)
+                if len(vs) > 120:
+                    vs = vs[:120] + "…"
+                print(f"      {k}: {vs}")
+
+    # validation
+    if report:
+        print(f"\n  VALIDATION  →  {report.get('status', '?').upper()}")
+        errs = report.get("errors", [])
+        if errs:
+            for e in errs:
+                print(f"    ✗  {e}")
+        else:
+            print("    ✓  no errors")
+
+    # links
+    print("\n  LINKS")
+    trace_id = params.get("aet.otel_trace_id", "")
+    mlflow_run_id = params.get("mlflow_run_id", "")
+    mlflow_uri = params.get("mlflow_tracking_uri", "")
+    mlflow_exp = params.get("mlflow_experiment_name", "")
+    if trace_id:
+        print(f"    signoz   http://localhost:8080/trace/{trace_id}")
+    if mlflow_run_id and mlflow_uri:
+        print(f"    mlflow   {mlflow_uri}/#/experiments/1/runs/{mlflow_run_id}")
+    session_id = params.get("gen_ai.conversation.id", "")
+    if session_id:
+        print(f"    replay   claude --resume {session_id}")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -514,6 +813,59 @@ def main() -> None:
     _add_global_args(p_run_suite)
     _add_tracking_args(p_run_suite)
     p_run_suite.set_defaults(func=_cmd_run_suite)
+
+    # ------------------------------------------------------------------
+    # runs
+    # ------------------------------------------------------------------
+    p_runs = subparsers.add_parser(
+        "runs",
+        help="List all runs in a project",
+    )
+    p_runs.add_argument("--suite", default=None, help="Filter by suite name")
+    p_runs.add_argument(
+        "--format", choices=["table", "json"], default="table",
+        help="Output format (default: table)",
+    )
+    _add_global_args(p_runs)
+    p_runs.set_defaults(func=_cmd_runs)
+
+    # ------------------------------------------------------------------
+    # baseline
+    # ------------------------------------------------------------------
+    p_baseline = subparsers.add_parser(
+        "baseline",
+        help="Set or show a baseline for regression detection",
+    )
+    p_baseline._baseline_parser = p_baseline
+    baseline_sub = p_baseline.add_subparsers(dest="baseline_subcommand")
+
+    p_baseline_set = baseline_sub.add_parser("set", help="Set the baseline for a suite")
+    p_baseline_set.add_argument("--suite", required=True, help="Suite name")
+    p_baseline_set.add_argument("--run-id", dest="run_id", default=None,
+                                help="Run ID to use as baseline (omit to pick best)")
+    _add_global_args(p_baseline_set)
+    p_baseline_set.set_defaults(baseline_func=_cmd_baseline_set)
+
+    p_baseline_show = baseline_sub.add_parser("show", help="Show the current baseline")
+    p_baseline_show.add_argument("--suite", required=True, help="Suite name")
+    _add_global_args(p_baseline_show)
+    p_baseline_show.set_defaults(baseline_func=_cmd_baseline_show)
+
+    p_baseline.set_defaults(func=_cmd_baseline)
+
+    # ------------------------------------------------------------------
+    # show
+    # ------------------------------------------------------------------
+    p_show = subparsers.add_parser(
+        "show",
+        help="Show all captured data for a single run",
+    )
+    p_show.add_argument("run_path", metavar="RUN_PATH", help="Path to the run directory")
+    p_show.add_argument(
+        "--format", choices=["text", "json"], default="text",
+        help="Output format (default: text)",
+    )
+    p_show.set_defaults(func=_cmd_show)
 
     # ------------------------------------------------------------------
     # dispatch

@@ -27,12 +27,23 @@ aet init-run --suite targetgen --target gemmini --method v0_naive_claude --seed 
 # Validate:
 aet validate runs/targetgen/2026-06-08_v0_naive_claude_seed001/
 
-# Compare:
+# Compare (writes summary.md, statistical_comparison.md, trajectory_similarity.md):
 aet compare --suite targetgen
 
 # Run a sweep:
 aet run-suite --suite targetgen --target gemmini \
     --methods v0_naive_claude,v2_schema_generator --seeds 1,2,3
+
+# List recorded runs:
+aet runs --suite targetgen
+
+# Inspect a single run:
+aet show runs/targetgen/2026-06-08_v0_naive_claude_seed001/
+
+# Set a performance baseline (picks best run by score, or pass --run-id):
+aet baseline set --suite targetgen
+aet baseline show --suite targetgen
+# Subsequent compares write regression_report.md flagging cost >1.2× or score <baseline−0.05
 ```
 
 ## Suites
@@ -57,7 +68,7 @@ aet run-suite --suite targetgen --target gemmini \
 |--------------|--------------------------------------------|---------------------------------------|
 | `[tracking]` | `mlflow`, `opentelemetry-sdk`              | MLflow + OTel experiment tracking     |
 | `[ray]`      | `ray[default]`                             | Parallel sweep execution via Ray      |
-| `[dev]`      | `pytest`, `ruff`, `mypy`, `pre-commit`     | Development and CI                    |
+| `[dev]`      | `pytest`, `ruff`, `jsonschema`             | Development and CI                    |
 | `[all]`      | All of the above                           | Full installation                     |
 
 Only `pyyaml` is required at install time.

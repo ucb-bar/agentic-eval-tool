@@ -99,3 +99,79 @@ class TestDefaultCompare:
         with open(report_dir / "metrics.csv", newline="") as fh:
             rows = list(csv.DictReader(fh))
         assert len(rows) == 3
+
+    def test_compare_writes_statistical_comparison_md(self, tmp_path):
+        suite = get_suite("default")
+        run_paths = []
+        for method in ["m1", "m2"]:
+            for seed in [1, 2, 3]:
+                spec, paths = _create_run(tmp_path, "default", method, seed)
+                suite.init_run(spec, paths, _logger)
+                suite.validate(spec, paths, _logger)
+                summary = json.loads((paths.metrics / "summary_metrics.json").read_text())
+                summary["task_achievement_score"] = 0.8 if method == "m1" else 0.5
+                summary["aet.agent.cost_usd"] = 0.05 if method == "m1" else 0.08
+                (paths.metrics / "summary_metrics.json").write_text(json.dumps(summary))
+                run_paths.append(paths.run_path)
+
+        report_dir = tmp_path / "reports" / "default"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        suite.compare(run_paths, report_dir, _logger)
+
+        assert (report_dir / "statistical_comparison.md").exists()
+
+    def test_statistical_comparison_has_pvalue(self, tmp_path):
+        suite = get_suite("default")
+        run_paths = []
+        for method in ["a", "b"]:
+            for seed in [1, 2, 3]:
+                spec, paths = _create_run(tmp_path, "default", method, seed)
+                suite.init_run(spec, paths, _logger)
+                suite.validate(spec, paths, _logger)
+                summary = json.loads((paths.metrics / "summary_metrics.json").read_text())
+                summary["task_achievement_score"] = 1.0 if method == "a" else 0.0
+                (paths.metrics / "summary_metrics.json").write_text(json.dumps(summary))
+                run_paths.append(paths.run_path)
+
+        report_dir = tmp_path / "reports" / "default"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        suite.compare(run_paths, report_dir, _logger)
+
+        content = (report_dir / "statistical_comparison.md").read_text()
+        assert "p=" in content
+
+    def test_compare_trajectory_similarity_section(self, tmp_path):
+        suite = get_suite("default")
+        run_paths = []
+        for seed in [1, 2]:
+            spec, paths = _create_run(tmp_path, "default", "m", seed)
+            suite.init_run(spec, paths, _logger)
+            suite.validate(spec, paths, _logger)
+            summary = json.loads((paths.metrics / "summary_metrics.json").read_text())
+            summary["tool_sequence"] = ["Bash", "Read", "Write"] if seed == 1 else ["Bash", "Edit"]
+            (paths.metrics / "summary_metrics.json").write_text(json.dumps(summary))
+            run_paths.append(paths.run_path)
+
+        report_dir = tmp_path / "reports" / "default"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        suite.compare(run_paths, report_dir, _logger)
+
+        assert (report_dir / "trajectory_similarity.md").exists()
+        content = (report_dir / "trajectory_similarity.md").read_text()
+        assert "Trajectory" in content
+
+    def test_compare_handles_missing_tool_sequence(self, tmp_path):
+        suite = get_suite("default")
+        run_paths = []
+        for seed in [1, 2]:
+            spec, paths = _create_run(tmp_path, "default", "m", seed)
+            suite.init_run(spec, paths, _logger)
+            suite.validate(spec, paths, _logger)
+            run_paths.append(paths.run_path)
+
+        report_dir = tmp_path / "reports" / "default"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        suite.compare(run_paths, report_dir, _logger)
+
+        assert (report_dir / "summary.md").exists()
+        assert not (report_dir / "trajectory_similarity.md").exists()

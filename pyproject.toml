@@ -17,7 +17,10 @@ tracking = [
     "opentelemetry-sdk>=1.28",
     "opentelemetry-exporter-otlp-proto-http>=1.28",
     "jsonschema>=4.0",
-    "opentelemetry-instrumentation-anthropic>=0.40",
+]
+openllmetry = [
+    "opentelemetry-instrumentation-anthropic>=0.55",
+    "opentelemetry-instrumentation-openai>=0.55",
 ]
 ray    = ["ray[default]>=2.40"]
 dev    = ["pytest>=8.0", "ruff", "jsonschema>=4.0"]
@@ -27,7 +30,8 @@ all    = [
     "opentelemetry-sdk>=1.28",
     "opentelemetry-exporter-otlp-proto-http>=1.28",
     "jsonschema>=4.0",
-    "opentelemetry-instrumentation-anthropic>=0.40",
+    "opentelemetry-instrumentation-anthropic>=0.55",
+    "opentelemetry-instrumentation-openai>=0.55",
     "ray[default]>=2.40",
     "pytest>=8.0",
     "ruff",

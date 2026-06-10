@@ -242,11 +242,28 @@ def _invoke_claude_cli(
     traceparent = logger.get_traceparent_for_subprocess()
     if traceparent:
         env["TRACEPARENT"] = traceparent
-    if otel_endpoint:
-        env.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", otel_endpoint)
-        env.setdefault("OTEL_SERVICE_NAME", "claude-code")
 
-    cmd = ["claude", "--print", "--output-format", "stream-json"]
+    if otel_endpoint:
+        # Activate Claude Code's built-in OTel (triggers automatically when this is set)
+        env["OTEL_EXPORTER_OTLP_ENDPOINT"] = otel_endpoint
+        env.setdefault("OTEL_SERVICE_NAME", "claude-code")
+        # Tag all Claude Code spans with the current aet run so SigNoz can filter by run
+        cfg = logger._config
+        resource_attrs = (
+            f"aet.run_id={cfg.run_id},"
+            f"aet.suite={cfg.suite},"
+            f"aet.target={cfg.target},"
+            f"aet.method={cfg.method},"
+            f"aet.seed={cfg.seed}"
+        )
+        existing = env.get("OTEL_RESOURCE_ATTRIBUTES", "")
+        env["OTEL_RESOURCE_ATTRIBUTES"] = f"{existing},{resource_attrs}" if existing else resource_attrs
+
+        # Give Claude Code enough time to flush spans before the process exits
+        env.setdefault("CLAUDE_CODE_OTEL_SHUTDOWN_TIMEOUT_MS", "5000")
+        env.setdefault("CLAUDE_CODE_OTEL_FLUSH_TIMEOUT_MS", "4000")
+
+    cmd = ["claude", "--print", "--verbose", "--output-format", "stream-json"]
     if skip_permissions:
         cmd.append("--dangerously-skip-permissions")
     # Run in the generated dir so file tools land there automatically
@@ -309,13 +326,39 @@ def _record_stream_metrics(
     logger.log_metric("aet.agent.tool_call_count", r.tool_call_count)
     logger.log_metric("aet.agent.tool_error_count", r.tool_error_count)
 
+    # ── streaming latency (TTFT) ───────────────────────────────────────
+    if r.duration_ms and r.num_turns:
+        # ttft not directly in result; approximate from duration_api vs duration
+        pass  # real TTFT comes from ttft_ms field parsed below
+
+    # ── finish reasons + inference details event ───────────────────────
+    all_finish_reasons = []
+    for t in r.turn_usage:
+        all_finish_reasons.extend(t.finish_reasons)
+    if all_finish_reasons:
+        logger.log_finish_reasons(list(dict.fromkeys(all_finish_reasons)))
+    logger.log_inference_details(
+        operation="invoke_agent",
+        provider="anthropic",
+        model=r.model,
+        conversation_id=r.session_id,
+        input_tokens=r.total_input_tokens,
+        output_tokens=r.total_output_tokens,
+        cache_read_tokens=r.total_cache_read_tokens,
+        cache_creation_tokens=r.total_cache_creation_tokens,
+        finish_reasons=all_finish_reasons,
+        response_id=r.turn_usage[-1].message_id if r.turn_usage else "",
+    )
+
     # ── session ID for replay ─────────────────────────────────────────
     if r.session_id:
         logger.log_session_id(r.session_id)
 
-    # ── model ─────────────────────────────────────────────────────────
+    # ── model + trace ID (persisted so `aet show` can link to SigNoz) ─
     if r.model:
         logger.log_param("gen_ai.response.model", r.model)
+    if trace_id := logger.otel_trace_id:
+        logger.log_param("aet.otel_trace_id", trace_id)
 
     # ── per-tool-call events ──────────────────────────────────────────
     for tc in r.tool_calls:
@@ -326,6 +369,19 @@ def _record_stream_metrics(
             is_error=tc.is_error,
             tool_call_id=tc.tool_use_id,
         )
+
+    # ── per-model cost breakdown ──────────────────────────────────────
+    for mu in r.model_usage:
+        safe = mu.model.replace("-", "_").replace(".", "_")
+        logger.log_metric(f"cost_usd.{safe}", mu.cost_usd)
+        logger.log_metric(f"input_tokens.{safe}", mu.input_tokens)
+        logger.log_metric(f"output_tokens.{safe}", mu.output_tokens)
+        if mu.cache_read_input_tokens:
+            logger.log_metric(f"cache_read_tokens.{safe}", mu.cache_read_input_tokens)
+        if mu.cache_creation_input_tokens:
+            logger.log_metric(f"cache_creation_tokens.{safe}", mu.cache_creation_input_tokens)
+        if mu.web_search_requests:
+            logger.log_metric(f"web_search_requests.{safe}", mu.web_search_requests)
 
     # ── completion capture (opt-in — may contain sensitive data) ──────
     if capture_content and r.result_text:
@@ -393,8 +449,10 @@ def _print_summary(
         print(f"       mlflow:   {url}")
     if trace_id := logger.otel_trace_id:
         print(f"       trace:    {trace_id}")
-        if otel_endpoint and "localhost" in otel_endpoint:
-            print("       signoz:   http://localhost:8080  →  Services  →  aet")
+        if otel_endpoint:
+            # derive SigNoz base from the OTLP endpoint (4317/4318 → 8080)
+            base = otel_endpoint.rstrip("/").replace(":4318", ":8080").replace(":4317", ":8080")
+            print(f"       signoz:   {base}/trace/{trace_id}")
 
 
 def _parse_args() -> argparse.Namespace:

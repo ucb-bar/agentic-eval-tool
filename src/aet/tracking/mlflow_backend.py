@@ -56,6 +56,12 @@ class MLflowBackend:
             local.log_param("mlflow_run_id", mlflow_run_id)
             local.log_param("mlflow_tracking_uri", uri)
             local.log_param("mlflow_experiment_name", exp_name)
+            # Enable auto-tracing for direct Anthropic SDK calls made within this process.
+            # No-ops if anthropic is not installed; does not affect CLI subprocess captures.
+            try:
+                self._mlflow.anthropic.autolog()
+            except Exception:
+                pass
         except Exception as e:
             local.warn(
                 f"MLflow setup failed ({e}); falling back to local-only tracking. "
@@ -67,6 +73,12 @@ class MLflowBackend:
     def run_id(self) -> str | None:
         if self._enabled and self._run:
             return self._run.info.run_id
+        return None
+
+    @property
+    def experiment_id(self) -> str | None:
+        if self._enabled and self._run:
+            return self._run.info.experiment_id
         return None
 
     # ------------------------------------------------------------------
@@ -172,6 +184,54 @@ class MLflowBackend:
             self._mlflow.end_run(status=mlflow_status)
         except Exception as e:
             self._local.warn(f"MLflow end_run failed: {e}")
+
+    def log_agent_trace(
+        self,
+        run_id: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+        num_turns: int,
+        duration_ms: int,
+        tool_calls: list[dict],
+    ) -> None:
+        """Record a complete CLI agent invocation as an MLflow trace span.
+
+        Creates one root span (invoke_agent) with one child span per tool call,
+        so the MLflow Traces tab shows the same structure as SigNoz.
+        """
+        if not self._enabled:
+            return
+        try:
+            with self._mlflow.start_span(name="invoke_agent", span_type="AGENT") as root:
+                root.set_inputs({"run_id": run_id, "model": model, "num_turns": num_turns})
+                root.set_outputs({
+                    "cost_usd": cost_usd,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "duration_ms": duration_ms,
+                })
+                root.set_attribute("gen_ai.request.model", model)
+                root.set_attribute("gen_ai.usage.input_tokens", input_tokens)
+                root.set_attribute("gen_ai.usage.output_tokens", output_tokens)
+                root.set_attribute("aet.cost_usd", cost_usd)
+                root.set_attribute("aet.num_turns", num_turns)
+                for tc in tool_calls:
+                    with self._mlflow.start_span(
+                        name=tc.get("name", "tool"),
+                        span_type="TOOL",
+                        parent_span=root,
+                    ) as ts:
+                        ts.set_inputs(tc.get("input", {}))
+                        ts.set_outputs({"result": tc.get("result", "")[:200]})
+                        ts.set_attribute("gen_ai.tool.name", tc.get("name", ""))
+                        ts.set_attribute("aet.tool.duration_s", tc.get("duration_s", 0.0))
+                        ts.set_attribute("aet.tool.is_error", tc.get("is_error", False))
+                        if tc.get("is_mcp"):
+                            ts.set_attribute("aet.tool.is_mcp", True)
+        except Exception as e:
+            self._local.warn(f"MLflow log_agent_trace failed: {e}")
 
     def patch_manifest(self, manifest_path: Path) -> None:
         """Write mlflow run_id back into run_manifest.yaml observability block."""

@@ -51,6 +51,7 @@ class EvalRunLogger:
         experiment_name: str | None = None,
         otel_endpoint: str | None = None,
         parent_run_id: str | None = None,
+        enable_openllmetry: bool = True,
     ) -> "EvalRunLogger":
         if tracking_mode not in TRACKING_MODES:
             tracking_mode = "local"
@@ -67,6 +68,7 @@ class EvalRunLogger:
             experiment_name=experiment_name,
             otel_endpoint=otel_endpoint,
             parent_run_id=parent_run_id,
+            enable_openllmetry=enable_openllmetry,
         )
         return cls(config)
 
@@ -150,17 +152,72 @@ class EvalRunLogger:
             return self._otel.start_agent_span(agent_name, model=model, provider=provider)
         return nullcontext()
 
+    def start_inference_span(self, model: str, provider: str = "anthropic",
+                             server_address: str = "", operation: str = "chat",
+                             stream: bool = False):
+        """Context manager for a direct LLM API call (Anthropic SDK, OpenAI, Bedrock)."""
+        if self._otel:
+            return self._otel.start_inference_span(
+                model=model, provider=provider, server_address=server_address,
+                operation=operation, stream=stream,
+            )
+        return nullcontext()
+
     def start_tool_span(self, tool_name: str, validator_name: str | None = None):
         """Context manager for a tool/validator execution — execute_tool."""
         if self._otel:
             return self._otel.start_tool_span(tool_name, validator_name=validator_name)
         return nullcontext()
 
-    def log_evaluation_result(self, name: str, score: float, label: str) -> None:
+    def log_rubric_score(
+        self,
+        criterion: str,
+        score: float,
+        weight: float = 1.0,
+        explanation: str = "",
+    ) -> None:
+        """Log a single rubric criterion score as metrics + event."""
+        self._local.log_metric(f"rubric.{criterion}.score", score)
+        self._local.log_metric(f"rubric.{criterion}.weight", weight)
+        self._local.log_event("aet.rubric.criterion", {
+            "criterion": criterion,
+            "score": score,
+            "weight": weight,
+            "explanation": explanation,
+        })
+        if self._mlflow:
+            self._mlflow.log_metric(f"rubric.{criterion}.score", score)
+            self._mlflow.log_metric(f"rubric.{criterion}.weight", weight)
+
+    def log_regression_check(
+        self,
+        metric: str,
+        value: float,
+        baseline_value: float,
+        threshold_pct: float,
+    ) -> None:
+        """Emit an aet.regression.{metric} event with delta and regression flag."""
+        if baseline_value != 0:
+            delta_pct = (value - baseline_value) / abs(baseline_value) * 100
+        else:
+            delta_pct = 0.0
+        is_regression = abs(delta_pct) > threshold_pct
+        self._local.log_event(f"aet.regression.{metric}", {
+            "metric": metric,
+            "value": value,
+            "baseline_value": baseline_value,
+            "delta_pct": round(delta_pct, 4),
+            "threshold_pct": threshold_pct,
+            "is_regression": is_regression,
+        })
+
+    def log_evaluation_result(self, name: str, score: float, label: str,
+                              explanation: str = "") -> None:
         """Emit a gen_ai.evaluation.result event on the current OTel span."""
-        self._local.log_event("evaluation.result", {"name": name, "score": score, "label": label})
+        self._local.log_event("evaluation.result", {"name": name, "score": score,
+                                                     "label": label, "explanation": explanation})
         if self._otel:
-            self._otel.log_evaluation_event(name, score, label)
+            self._otel.log_evaluation_event(name, score, label, explanation=explanation)
 
     # ------------------------------------------------------------------
     # Claude Code / agent-specific instrumentation
@@ -208,6 +265,7 @@ class EvalRunLogger:
         cache_creation_tokens: int = 0,
         cache_read_tokens: int = 0,
         model: str = "",
+        provider: str = "anthropic",
     ) -> None:
         """Record all token counts — includes Anthropic cache buckets."""
         self._local.log_metric("gen_ai.usage.input_tokens", input_tokens)
@@ -225,7 +283,56 @@ class EvalRunLogger:
                 self._mlflow.log_metric("gen_ai.usage.cache_read.input_tokens", cache_read_tokens)
         if self._otel:
             self._otel.log_token_usage(
-                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, model
+                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                model=model, provider=provider,
+            )
+
+    def log_ttft(self, ttft_s: float, provider: str = "anthropic", model: str = "") -> None:
+        """Record time-to-first-chunk (streaming latency) as metric + span attribute + histogram."""
+        self._local.log_metric("gen_ai.response.time_to_first_chunk", ttft_s)
+        if self._mlflow:
+            self._mlflow.log_metric("gen_ai.response.time_to_first_chunk", ttft_s)
+        if self._otel:
+            self._otel.log_ttft(ttft_s, provider=provider, model=model)
+
+    def log_finish_reasons(self, reasons: list[str]) -> None:
+        """Record gen_ai.response.finish_reasons on the current span."""
+        if reasons:
+            self._local.log_event("gen_ai.response.finish_reasons", {"reasons": reasons})
+        if self._otel:
+            self._otel.log_finish_reasons(reasons)
+
+    def log_exception(self, exc_type: str, message: str, stacktrace: str = "") -> None:
+        """Emit gen_ai.client.operation.exception event and log locally."""
+        self._local.log_event("gen_ai.client.operation.exception", {
+            "exception.type": exc_type,
+            "exception.message": message,
+        })
+        if self._otel:
+            self._otel.log_exception_event(exc_type, message, stacktrace)
+
+    def log_inference_details(
+        self,
+        operation: str,
+        provider: str,
+        model: str = "",
+        conversation_id: str = "",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        finish_reasons: list[str] | None = None,
+        response_id: str = "",
+        ttft_s: float = 0.0,
+    ) -> None:
+        """Emit gen_ai.client.inference.operation.details event (spec opt-in)."""
+        if self._otel:
+            self._otel.log_inference_details_event(
+                operation=operation, provider=provider, model=model,
+                conversation_id=conversation_id, stream=True,
+                input_tokens=input_tokens, output_tokens=output_tokens,
+                cache_read_tokens=cache_read_tokens, cache_creation_tokens=cache_creation_tokens,
+                finish_reasons=finish_reasons or [], response_id=response_id, ttft_s=ttft_s,
             )
 
     def log_cost(self, cost_usd: float, model: str = "") -> None:
@@ -294,6 +401,45 @@ class EvalRunLogger:
                 model=model,
             )
 
+    def emit_tool_call_spans(
+        self,
+        tool_calls: list,
+        turn_usage: list,
+        t0_ns: int,
+        stream_duration_s: float,
+    ) -> None:
+        """Create OTel child spans (tool calls + inference turns) — call while invoke_agent span is active."""
+        if self._otel:
+            self._otel.emit_tool_call_spans(tool_calls, turn_usage, t0_ns, stream_duration_s)
+
+    def log_agent_trace(
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+        num_turns: int,
+        duration_ms: int,
+        tool_calls: list[dict],
+    ) -> None:
+        """Push a complete CLI agent invocation to the MLflow Traces tab.
+
+        Each tool call becomes a child span, mirroring the SigNoz span tree
+        without requiring the Anthropic Python SDK.
+        """
+        if not self._mlflow:
+            return
+        self._mlflow.log_agent_trace(
+            run_id=self._config.run_id,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            num_turns=num_turns,
+            duration_ms=duration_ms,
+            tool_calls=tool_calls,
+        )
+
     def get_traceparent_for_subprocess(self) -> str | None:
         """Return TRACEPARENT value for injecting into a subprocess environment."""
         if self._otel:
@@ -308,7 +454,8 @@ class EvalRunLogger:
 
     def close(self) -> None:
         """Flush and close all backends. Call after finish()."""
-        pass  # local backend has no buffers; MLflow run already ended in finish()
+        if self._otel:
+            self._otel.uninstrument_openllmetry()
 
     def patch_manifest(self, manifest_path: Path) -> None:
         """Write tracking IDs back into run_manifest.yaml."""
@@ -326,7 +473,8 @@ class EvalRunLogger:
         if not run_id:
             return None
         uri = (self._config.mlflow_tracking_uri or "http://localhost:5000").rstrip("/")
-        return f"{uri}/#/experiments/0/runs/{run_id}"
+        exp_id = self._mlflow.experiment_id if self._mlflow else "0"
+        return f"{uri}/#/experiments/{exp_id}/runs/{run_id}"
 
     @property
     def otel_trace_id(self) -> str | None:
