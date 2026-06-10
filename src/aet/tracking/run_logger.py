@@ -162,6 +162,128 @@ class EvalRunLogger:
         if self._otel:
             self._otel.log_evaluation_event(name, score, label)
 
+    # ------------------------------------------------------------------
+    # Claude Code / agent-specific instrumentation
+
+    def log_prompt(self, prompt: str, role: str = "user", max_chars: int = 4000) -> None:
+        """Record the input prompt as a span event and local log entry."""
+        truncated = prompt[:max_chars]
+        self._local.log_event("gen_ai.prompt", {"role": role, "content": truncated,
+                                                 "truncated": len(prompt) > max_chars})
+        if self._otel:
+            self._otel.log_prompt_event(truncated, role=role)
+
+    def log_completion(self, text: str, max_chars: int = 8000) -> None:
+        """Record the agent output as a span event and local log entry."""
+        truncated = text[:max_chars]
+        self._local.log_event("gen_ai.completion", {"content": truncated,
+                                                      "truncated": len(text) > max_chars})
+        if self._otel:
+            self._otel.log_completion_event(truncated)
+
+    def log_tool_call_event(
+        self,
+        tool_name: str,
+        input_summary: str,
+        result_summary: str,
+        is_error: bool = False,
+        tool_call_id: str = "",
+    ) -> None:
+        """Record a single Claude tool invocation (Bash, Read, Write, Edit, …)."""
+        self._local.log_event("gen_ai.tool.call", {
+            "tool": tool_name,
+            "input": input_summary[:300],
+            "result": result_summary[:300],
+            "error": is_error,
+        })
+        if self._otel:
+            self._otel.log_tool_call_event(
+                tool_name, tool_call_id, input_summary[:300], result_summary[:300], is_error
+            )
+
+    def log_token_usage(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        model: str = "",
+    ) -> None:
+        """Record all token counts — includes Anthropic cache buckets."""
+        self._local.log_metric("gen_ai.usage.input_tokens", input_tokens)
+        self._local.log_metric("gen_ai.usage.output_tokens", output_tokens)
+        if cache_creation_tokens:
+            self._local.log_metric("gen_ai.usage.cache_creation.input_tokens", cache_creation_tokens)
+        if cache_read_tokens:
+            self._local.log_metric("gen_ai.usage.cache_read.input_tokens", cache_read_tokens)
+        if self._mlflow:
+            self._mlflow.log_metric("gen_ai.usage.input_tokens", input_tokens)
+            self._mlflow.log_metric("gen_ai.usage.output_tokens", output_tokens)
+            if cache_creation_tokens:
+                self._mlflow.log_metric("gen_ai.usage.cache_creation.input_tokens", cache_creation_tokens)
+            if cache_read_tokens:
+                self._mlflow.log_metric("gen_ai.usage.cache_read.input_tokens", cache_read_tokens)
+        if self._otel:
+            self._otel.log_token_usage(
+                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, model
+            )
+
+    def log_cost(self, cost_usd: float, model: str = "") -> None:
+        """Record API cost in USD."""
+        self._local.log_metric("aet.agent.cost_usd", cost_usd)
+        if self._mlflow:
+            self._mlflow.log_metric("aet.agent.cost_usd", cost_usd)
+        if self._otel:
+            self._otel.set_span_attributes({"aet.agent.cost_usd": cost_usd})
+            if model:
+                self._otel.set_span_attributes({"gen_ai.response.model": model})
+
+    def log_agent_turns(self, num_turns: int) -> None:
+        """Record number of agent turns (round-trips to the LLM)."""
+        self._local.log_metric("aet.agent.num_turns", num_turns)
+        if self._mlflow:
+            self._mlflow.log_metric("aet.agent.num_turns", num_turns)
+        if self._otel:
+            self._otel.set_span_attribute("aet.agent.num_turns", num_turns)
+
+    def log_session_id(self, session_id: str) -> None:
+        """Record Claude Code session ID (enables /resume for replay)."""
+        self._local.log_param("gen_ai.conversation.id", session_id)
+        if self._mlflow:
+            self._mlflow.log_param("gen_ai.conversation.id", session_id)
+        if self._otel:
+            self._otel.set_span_attribute("gen_ai.conversation.id", session_id)
+
+    def log_permission_mode(self, mode: str, approvals_required: int = 0) -> None:
+        """Record permission mode and whether human approvals were needed."""
+        self._local.log_param("aet.agent.permission_mode", mode)
+        self._local.log_metric("aet.agent.human_approvals_required", approvals_required)
+        if self._mlflow:
+            self._mlflow.log_param("aet.agent.permission_mode", mode)
+        if self._otel:
+            self._otel.set_span_attribute("aet.agent.permission_mode", mode)
+
+    def log_file_context(self, input_files: list[str], output_files: list[str]) -> None:
+        """Record files provided to / produced by the agent."""
+        self._local.log_event("agent.file_context", {
+            "input_files": input_files,
+            "output_files": output_files,
+            "input_count": len(input_files),
+            "output_count": len(output_files),
+        })
+        if self._mlflow:
+            self._mlflow.log_metric("input_file_count", len(input_files))
+            self._mlflow.log_metric("output_file_count", len(output_files))
+
+    def log_task_achievement(self, achieved: bool, score: float, rationale: str = "") -> None:
+        """Record whether the agent achieved the given task."""
+        label = "achieved" if achieved else "not_achieved"
+        self._local.log_metric("task_achievement_score", score)
+        self._local.log_event("task.achievement", {"achieved": achieved, "score": score, "rationale": rationale})
+        if self._mlflow:
+            self._mlflow.log_metric("task_achievement_score", score)
+        self.log_evaluation_result("task_achievement", score, label)
+
     def record_llm_call(self, duration_s: float, input_tokens: int, output_tokens: int, model: str = "") -> None:
         """Manually record an LLM call's metrics (for cases openllmetry doesn't cover)."""
         if self._otel:

@@ -297,6 +297,34 @@ class OtelBackend:
         return _span_cm()
 
     # ------------------------------------------------------------------
+    # Span attribute helpers
+
+    def set_span_attribute(self, key: str, value: Any) -> None:
+        """Set an attribute on the currently active span."""
+        if not self._enabled:
+            return
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+            if span.is_recording():
+                span.set_attribute(key, value)
+        except Exception:
+            pass
+
+    def set_span_attributes(self, attrs: dict[str, Any]) -> None:
+        if not self._enabled:
+            return
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+            if span.is_recording():
+                for k, v in attrs.items():
+                    if v is not None:
+                        span.set_attribute(k, v)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     # Span events
 
     def log_evaluation_event(self, name: str, score: float, label: str) -> None:
@@ -318,6 +346,98 @@ class OtelBackend:
                     GEN_AI_EVAL_SCORE_LABEL: label,
                 },
             )
+        except Exception:
+            pass
+
+    def log_prompt_event(self, content: str, role: str = "user") -> None:
+        """Add a gen_ai.user.message or gen_ai.system event to the current span."""
+        if not self._enabled:
+            return
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+            if span.is_recording():
+                event_name = "gen_ai.system" if role == "system" else "gen_ai.user.message"
+                span.add_event(event_name, {"content": content, "role": role})
+        except Exception:
+            pass
+
+    def log_completion_event(self, content: str) -> None:
+        """Add a gen_ai.assistant.message event to the current span."""
+        if not self._enabled:
+            return
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+            if span.is_recording():
+                span.add_event("gen_ai.assistant.message", {"content": content})
+        except Exception:
+            pass
+
+    def log_tool_call_event(
+        self,
+        tool_name: str,
+        tool_call_id: str,
+        input_summary: str,
+        result_summary: str,
+        is_error: bool,
+    ) -> None:
+        """Add a gen_ai.tool.call event to the current span."""
+        if not self._enabled:
+            return
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+            if span.is_recording():
+                span.add_event("gen_ai.tool.call", {
+                    "gen_ai.tool.name": tool_name,
+                    "gen_ai.tool.call.id": tool_call_id,
+                    "gen_ai.tool.input": input_summary,
+                    "gen_ai.tool.result": result_summary,
+                    "gen_ai.tool.is_error": is_error,
+                })
+        except Exception:
+            pass
+
+    def log_token_usage(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        model: str = "",
+    ) -> None:
+        """Set gen_ai.usage.* attributes on the current span and record to histograms."""
+        if not self._enabled:
+            return
+        try:
+            from opentelemetry import trace
+            from aet.tracking.semconv import (
+                GEN_AI_USAGE_INPUT_TOKENS, GEN_AI_USAGE_OUTPUT_TOKENS,
+                GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS, GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+            )
+            span = trace.get_current_span()
+            if span.is_recording():
+                span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
+                span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
+                if cache_creation_tokens:
+                    span.set_attribute(GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS, cache_creation_tokens)
+                if cache_read_tokens:
+                    span.set_attribute(GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, cache_read_tokens)
+        except Exception:
+            pass
+        # Also record to histograms
+        attrs: dict[str, Any] = {"gen_ai.operation.name": "invoke_agent"}
+        if model:
+            attrs["gen_ai.request.model"] = model
+        try:
+            if self._token_usage:
+                self._token_usage.record(input_tokens, attributes={**attrs, "gen_ai.token.type": "input"})
+                self._token_usage.record(output_tokens, attributes={**attrs, "gen_ai.token.type": "output"})
+                if cache_read_tokens:
+                    self._token_usage.record(cache_read_tokens, attributes={**attrs, "gen_ai.token.type": "cache_read"})
+                if cache_creation_tokens:
+                    self._token_usage.record(cache_creation_tokens, attributes={**attrs, "gen_ai.token.type": "cache_creation"})
         except Exception:
             pass
 
