@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from pathlib import Path
 from aet.suites.base import EvalSuite
 from aet.core.run_spec import RunSpec
@@ -70,37 +71,43 @@ class TargetGenSuite(EvalSuite):
 
         import inspect
         for name, module in _VALIDATOR_MAP.items():
-            span_ctx = logger.start_span(f"validate.{name}") if logger else None
-            try:
-                sig = inspect.signature(module.run)
-                if "project_root" in sig.parameters:
-                    result = module.run(paths.run_path, manifest, project_root=project_root)
-                else:
-                    result = module.run(paths.run_path, manifest)
-                report["validators"][name] = result
-                if result.get("errors"):
-                    report["total_errors"] += len(result["errors"])
-                if result.get("warnings"):
-                    report["total_warnings"] += len(result.get("warnings", []))
-                if logger:
-                    logger.log_event(f"validation.{name}.completed", {
-                        "errors": result.get("errors", []),
-                        "warnings": result.get("warnings", []),
-                    })
-            except Exception as exc:
-                report["validators"][name] = {"errors": [str(exc)], "warnings": []}
-                report["total_errors"] += 1
-                if logger:
-                    logger.log_event(f"validation.{name}.error", {"error": str(exc)})
-            finally:
-                if span_ctx:
-                    try: span_ctx.__exit__(None, None, None)
-                    except Exception: pass
+            span_cm = (
+                logger.start_tool_span(f"validate_{name}", validator_name=name)
+                if logger else nullcontext()
+            )
+            with span_cm:
+                try:
+                    sig = inspect.signature(module.run)
+                    if "project_root" in sig.parameters:
+                        result = module.run(paths.run_path, manifest, project_root=project_root)
+                    else:
+                        result = module.run(paths.run_path, manifest)
+                    report["validators"][name] = result
+                    if result.get("errors"):
+                        report["total_errors"] += len(result["errors"])
+                    if result.get("warnings"):
+                        report["total_warnings"] += len(result.get("warnings", []))
+                    if logger:
+                        logger.log_event(f"validation.{name}.completed", {
+                            "errors": result.get("errors", []),
+                            "warnings": result.get("warnings", []),
+                        })
+                except Exception as exc:
+                    report["validators"][name] = {"errors": [str(exc)], "warnings": []}
+                    report["total_errors"] += 1
+                    if logger:
+                        logger.log_event(f"validation.{name}.error", {"error": str(exc)})
 
         if report["total_errors"] > 0:
             report["overall"] = "fail"
         elif report["total_warnings"] > 5:
             report["overall"] = "partial"
+
+        if logger:
+            score = 1.0 if report["overall"] == "pass" else 0.0
+            logger.log_evaluation_result("validation_overall", score, report["overall"])
+            logger.log_metric("total_errors", report["total_errors"])
+            logger.log_metric("total_warnings", report["total_warnings"])
 
         try:
             paths.run_path.mkdir(parents=True, exist_ok=True)

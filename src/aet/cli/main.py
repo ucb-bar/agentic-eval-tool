@@ -170,7 +170,8 @@ def _do_init_run(args, method: str, seed: int) -> Path:
     )
 
     suite = get_suite(args.suite)
-    suite.init_run(spec, paths, logger)
+    with logger.start_run_span(f"{spec.suite}-init"):
+        suite.init_run(spec, paths, logger)
     logger.finish(status="initialized")
 
     return paths.run_path
@@ -228,11 +229,12 @@ def _do_validate(run_path: Path, args) -> dict:
     )
 
     suite = get_suite(manifest.suite)
-    report = suite.validate(spec, paths, logger)
-    try:
-        suite.collect_metrics(spec, paths, logger)
-    except Exception:
-        pass
+    with logger.start_run_span(f"{manifest.suite}-eval"):
+        report = suite.validate(spec, paths, logger)
+        try:
+            suite.collect_metrics(spec, paths, logger)
+        except Exception:
+            pass
     final_status = report.get("overall") or report.get("status") or "unknown"
     logger.finish(status=final_status)
 

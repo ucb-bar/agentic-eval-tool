@@ -1,0 +1,43 @@
+# Full observability stack: OTel Collector + Jaeger + Prometheus.
+#
+# Usage:
+#   docker compose -f observability/docker-compose.observability.yml up -d
+#
+# Services:
+#   Jaeger UI:      http://localhost:16686
+#   Prometheus:     http://localhost:9090
+#   OTLP gRPC:      localhost:4317
+#   OTLP HTTP:      localhost:4318
+#
+# Run aet with:
+#   aet run-suite --tracking full --otel-endpoint http://localhost:4318 ...
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+      - "8889:8889"     # Prometheus metrics scrape endpoint
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"   # Jaeger UI
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped

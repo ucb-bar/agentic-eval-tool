@@ -23,3 +23,5 @@ class TrackingConfig:
     experiment_name: str | None = None
     otel_endpoint: str | None = None
     service_name: str = "aet"
+    enable_openllmetry: bool = True
+    claude_code_trace_parent: str | None = None

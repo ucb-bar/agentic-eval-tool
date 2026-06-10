@@ -123,6 +123,53 @@ class EvalRunLogger:
             return self._otel.start_span(name, attributes)
         return nullcontext()
 
+    def start_run_span(self, workflow_name: str):
+        """Context manager wrapping the full eval run as invoke_workflow."""
+        if self._otel:
+            return self._otel.start_workflow_span(
+                workflow_name,
+                suite=self._config.suite,
+                method=self._config.method,
+                seed=self._config.seed,
+                target=self._config.target,
+                run_id=self._config.run_id,
+            )
+        return nullcontext()
+
+    def start_agent_span(self, agent_name: str, model: str = "", provider: str = "anthropic"):
+        """Context manager for an agent invocation — invoke_agent."""
+        if self._otel:
+            return self._otel.start_agent_span(agent_name, model=model, provider=provider)
+        return nullcontext()
+
+    def start_tool_span(self, tool_name: str, validator_name: str | None = None):
+        """Context manager for a tool/validator execution — execute_tool."""
+        if self._otel:
+            return self._otel.start_tool_span(tool_name, validator_name=validator_name)
+        return nullcontext()
+
+    def log_evaluation_result(self, name: str, score: float, label: str) -> None:
+        """Emit a gen_ai.evaluation.result event on the current OTel span."""
+        self._local.log_event("evaluation.result", {"name": name, "score": score, "label": label})
+        if self._otel:
+            self._otel.log_evaluation_event(name, score, label)
+
+    def record_llm_call(self, duration_s: float, input_tokens: int, output_tokens: int, model: str = "") -> None:
+        """Manually record an LLM call's metrics (for cases openllmetry doesn't cover)."""
+        if self._otel:
+            self._otel.record_metric(
+                op_duration=duration_s,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model=model,
+            )
+
+    def get_traceparent_for_subprocess(self) -> str | None:
+        """Return TRACEPARENT value for injecting into a subprocess environment."""
+        if self._otel:
+            return self._otel.get_traceparent_for_subprocess()
+        return None
+
     # ------------------------------------------------------------------
     def finish(self, status: str, message: str | None = None) -> None:
         self._local.log_event("run.finished", {"status": status, "message": message})
