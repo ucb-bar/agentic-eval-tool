@@ -32,6 +32,9 @@ class MLflowBackend:
 
     def _setup(self, config: TrackingConfig, local) -> None:
         try:
+            import os
+            os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "10")
+            os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "1")
             uri = config.mlflow_tracking_uri or "http://localhost:5000"
             self._mlflow.set_tracking_uri(uri)
             exp_name = config.experiment_name or f"targetgen-evals-{config.target}"

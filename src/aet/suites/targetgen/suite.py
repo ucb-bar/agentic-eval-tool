@@ -132,21 +132,22 @@ class TargetGenSuite(EvalSuite):
         from aet.suites.targetgen.collect_metrics import build_summary
         from aet.core.yaml_utils import load_yaml
 
-        manifest = load_yaml(paths.run_path / "run_manifest.yaml")
-        validator_results = {}
-        report_path = paths.run_path / "validation_report.json"
-        if report_path.exists():
-            try:
-                report = json.loads(report_path.read_text())
-                validator_results = report.get("validators", {})
-            except Exception:
-                pass
+        with (logger.start_tool_span("collect_metrics") if logger else nullcontext()):
+            manifest = load_yaml(paths.run_path / "run_manifest.yaml")
+            validator_results = {}
+            report_path = paths.run_path / "validation_report.json"
+            if report_path.exists():
+                try:
+                    report = json.loads(report_path.read_text())
+                    validator_results = report.get("validators", {})
+                except Exception:
+                    pass
 
-        # arch_rules: empty for now (rules are tracked in validation_report)
-        summary = build_summary(manifest, validator_results, arch_rules=[])
-        paths.metrics.mkdir(parents=True, exist_ok=True)
-        (paths.metrics / "summary_metrics.json").write_text(json.dumps(summary, indent=2) + "\n")
-        return summary
+            # arch_rules: empty for now (rules are tracked in validation_report)
+            summary = build_summary(manifest, validator_results, arch_rules=[])
+            paths.metrics.mkdir(parents=True, exist_ok=True)
+            (paths.metrics / "summary_metrics.json").write_text(json.dumps(summary, indent=2) + "\n")
+            return summary
 
     def compare(self, run_paths, report_dir, logger):
         from aet.suites.targetgen.compare import run as compare_run
