@@ -682,6 +682,62 @@ class EvalRunLogger:
             "iteration": iteration, "detail": detail,
         }, stage="eval", actor="oracle")
 
+    def log_eval_score_gen(
+        self,
+        functional_pass: bool,
+        cycles: int | None = None,
+        c_ref: int | None = None,
+        ratio: float | None = None,
+        perf: str = "",
+        improved: bool = False,
+        cheat_suspected: bool = False,
+        cheat_flags: list | None = None,
+        holdout_present: bool = True,
+        holdout_file: str | None = None,
+        tainted: bool = False,
+    ) -> None:
+        """Emit eval.score event for spec-to-rtl (generative) runs."""
+        self._local._log_event_rich("eval.score", {
+            "task": "spec-to-rtl",
+            "functional_pass": functional_pass,
+            "cycles": cycles,
+            "c_ref": c_ref,
+            "ratio": ratio,
+            "perf": perf,
+            "improved": improved,
+            "cheat_suspected": cheat_suspected,
+            "cheat_flags": cheat_flags or [],
+            "holdout_present": holdout_present,
+            "holdout_file": holdout_file,
+            "tainted": tainted,
+        }, stage="eval", actor="harness")
+        self._local.log_metric("hw.functional_pass", int(functional_pass))
+        self._local.log_metric("hw.tainted", int(tainted))
+        self._local.log_metric("hw.cheat_suspected", int(cheat_suspected))
+        if cycles is not None:
+            self._local.log_metric("hw.cycles", cycles)
+        if c_ref is not None:
+            self._local.log_metric("hw.c_ref", c_ref)
+        if ratio is not None:
+            self._local.log_metric("hw.perf_ratio", ratio)
+        if perf:
+            self._local.log_param("hw.perf", perf)
+
+    def log_integrity_check(
+        self,
+        passed: bool,
+        violation_type: str = "",
+        flags: list | None = None,
+        detail: str = "",
+    ) -> None:
+        """Emit integrity.check event (cheat detection, taint scan, etc.)."""
+        self._local._log_event_rich("integrity.check", {
+            "passed": passed,
+            "violation_type": violation_type,
+            "flags": flags or [],
+            "detail": detail,
+        }, stage="eval", actor="harness")
+
     # ------------------------------------------------------------------
     # Utility writers
 
