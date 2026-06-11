@@ -738,6 +738,25 @@ class EvalRunLogger:
             "detail": detail,
         }, stage="eval", actor="harness")
 
+    def log_iteration_result(
+        self,
+        iteration: int,
+        oracle_output: str = "",
+        passed: bool = False,
+        failure_category: str | None = None,
+        tok_in: int | None = None,
+        elapsed_s: float | None = None,
+    ) -> None:
+        """Emit iter.result event for one oracle invocation during an agent run."""
+        self._local._log_event_rich("iter.result", {
+            "iteration": iteration,
+            "passed": passed,
+            "failure_category": failure_category,
+            "oracle_output": oracle_output[:500],
+            "tok_in": tok_in,
+            "elapsed_s": elapsed_s,
+        }, stage="eval", actor="oracle")
+
     # ------------------------------------------------------------------
     # Utility writers
 

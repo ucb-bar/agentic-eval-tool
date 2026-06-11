@@ -133,6 +133,7 @@ class HardwareBenchmarkSuite(EvalSuite):
         }
 
     def compare(self, run_paths: list[Path], report_dir: Path, logger) -> None:
+        import math
         report_dir.mkdir(parents=True, exist_ok=True)
         rows: list[dict] = []
         for rp in run_paths:
@@ -155,11 +156,26 @@ class HardwareBenchmarkSuite(EvalSuite):
         if not rows:
             return
 
-        # hw_summary.md
+        # Group by method
         method_map: dict[str, list[dict]] = {}
         for row in rows:
             m = row.get("method", "unknown")
             method_map.setdefault(m, []).append(row)
+
+        def _nums(method_rows, key):
+            return [r[key] for r in method_rows if isinstance(r.get(key), (int, float))]
+
+        def _mean(vals):
+            return sum(vals) / len(vals) if vals else None
+
+        def _stddev(vals):
+            if len(vals) < 2:
+                return None
+            m = sum(vals) / len(vals)
+            return math.sqrt(sum((x - m) ** 2 for x in vals) / (len(vals) - 1))
+
+        def _fmt(v, decimals=2):
+            return f"{v:.{decimals}f}" if v is not None else "NA"
 
         lines = [
             "# Hardware Benchmark Comparison",
@@ -169,33 +185,127 @@ class HardwareBenchmarkSuite(EvalSuite):
             "",
             "## Pass rate by method",
             "",
-            "| method | n | pass_rate | mean_recall | mean_precision | mean_wall_s |",
-            "|---|---|---|---|---|---|",
         ]
-        for method, method_rows in sorted(method_map.items()):
-            passes = [r["hw.testbench_pass"] for r in method_rows
-                      if isinstance(r.get("hw.testbench_pass"), (int, float))]
-            recalls = [r["hw.localization_recall"] for r in method_rows
-                       if isinstance(r.get("hw.localization_recall"), (int, float))]
-            precisions = [r["hw.localization_precision"] for r in method_rows
-                          if isinstance(r.get("hw.localization_precision"), (int, float))]
-            walls = [r["run.wall_time_s"] for r in method_rows
-                     if isinstance(r.get("run.wall_time_s"), (int, float))]
-            pass_rate = f"{sum(passes)/len(passes):.2f}" if passes else "NA"
-            mean_rec = f"{sum(recalls)/len(recalls):.3f}" if recalls else "NA"
-            mean_prec = f"{sum(precisions)/len(precisions):.3f}" if precisions else "NA"
-            mean_wall = f"{sum(walls)/len(walls):.1f}s" if walls else "NA"
-            lines.append(f"| {method} | {len(method_rows)} | {pass_rate} | {mean_rec} | {mean_prec} | {mean_wall} |")
 
-        # Statistical comparison across methods (recall + precision)
+        # Detect task type from rows
+        is_gen = any(r.get("task") == "spec-to-rtl" for r in rows)
+
+        if is_gen:
+            lines += [
+                "| method | n | func_pass_rate | ±σ | mean_perf_ratio | mean_wall_s | cheat_rate |",
+                "|---|---|---|---|---|---|---|",
+            ]
+            for method, mrows in sorted(method_map.items()):
+                passes = _nums(mrows, "hw.functional_pass")
+                ratios = _nums(mrows, "hw.perf_ratio")
+                walls = _nums(mrows, "run.wall_time_s")
+                cheats = _nums(mrows, "hw.cheat_suspected")
+                pr = _mean(passes); pr_sd = _stddev(passes)
+                lines.append(
+                    f"| {method} | {len(mrows)} | {_fmt(pr)} | {_fmt(pr_sd)} | "
+                    f"{_fmt(_mean(ratios), 3)} | {_fmt(_mean(walls), 1)} | "
+                    f"{_fmt(_mean(cheats), 2)} |"
+                )
+        else:
+            lines += [
+                "| method | n | pass_rate | ±σ | mean_recall | mean_precision | mean_wall_s |",
+                "|---|---|---|---|---|---|---|",
+            ]
+            for method, mrows in sorted(method_map.items()):
+                passes = _nums(mrows, "hw.testbench_pass")
+                recalls = _nums(mrows, "hw.localization_recall")
+                precs = _nums(mrows, "hw.localization_precision")
+                walls = _nums(mrows, "run.wall_time_s")
+                pr = _mean(passes); pr_sd = _stddev(passes)
+                lines.append(
+                    f"| {method} | {len(mrows)} | {_fmt(pr)} | {_fmt(pr_sd)} | "
+                    f"{_fmt(_mean(recalls), 3)} | {_fmt(_mean(precs), 3)} | "
+                    f"{_fmt(_mean(walls), 1)} |"
+                )
+
+        # Capability boundary: flag methods with high variance (σ > 0.3 on pass)
+        boundary_methods = []
+        for method, mrows in method_map.items():
+            key = "hw.functional_pass" if is_gen else "hw.testbench_pass"
+            vals = _nums(mrows, key)
+            sd = _stddev(vals)
+            if sd is not None and sd > 0.3:
+                boundary_methods.append(method)
+        if boundary_methods:
+            lines += [
+                "",
+                f"> **Capability boundary detected** — high pass variance (σ > 0.3) "
+                f"in: {', '.join(sorted(boundary_methods))}. "
+                f"These methods are near the task difficulty threshold; "
+                f"targeted skills/tools have highest expected leverage here.",
+            ]
+
+        # Struggle metrics by method
+        struggle_keys = [
+            ("agent.stall_rate", "stall_rate", ".3f"),
+            ("agent.read_to_write_ratio", "read/write", ".2f"),
+            ("agent.oracle_without_edit_count", "oracle_no_edit", ".1f"),
+            ("agent.max_consecutive_no_edit_turns", "max_idle_turns", ".1f"),
+            ("agent.total_oracle_runs", "total_oracle_runs", ".1f"),
+        ]
+        any_struggle = any(
+            any(r.get(k) is not None for r in rows) for k, _, _ in struggle_keys
+        )
+        if any_struggle:
+            lines += [
+                "",
+                "## Agent struggle metrics by method",
+                "",
+                "| method | n | " + " | ".join(label for _, label, _ in struggle_keys) + " |",
+                "|---|---|" + "|".join("---" for _ in struggle_keys) + "|",
+            ]
+            for method, mrows in sorted(method_map.items()):
+                cells = []
+                for key, _, fmt in struggle_keys:
+                    vals = _nums(mrows, key)
+                    m = _mean(vals)
+                    cells.append(f"{m:{fmt}}" if m is not None else "NA")
+                lines.append(f"| {method} | {len(mrows)} | " + " | ".join(cells) + " |")
+
+        # Progression metrics by method
+        prog_keys = [
+            ("agent.first_elaboration_iter", "mean_iters_to_elab", ".1f"),
+            ("agent.first_pass_iter", "mean_iters_to_pass", ".1f"),
+            ("agent.tok_in_at_first_elaboration", "tok_at_elab", ".0f"),
+            ("agent.tok_in_at_first_pass", "tok_at_pass", ".0f"),
+        ]
+        any_prog = any(
+            any(r.get(k) is not None for r in rows) for k, _, _ in prog_keys
+        )
+        if any_prog:
+            lines += [
+                "",
+                "## Progression metrics by method",
+                "",
+                "| method | n | " + " | ".join(label for _, label, _ in prog_keys) + " |",
+                "|---|---|" + "|".join("---" for _ in prog_keys) + "|",
+            ]
+            for method, mrows in sorted(method_map.items()):
+                cells = []
+                for key, _, fmt in prog_keys:
+                    vals = _nums(mrows, key)
+                    m = _mean(vals)
+                    cells.append(f"{m:{fmt}}" if m is not None else "NA")
+                lines.append(f"| {method} | {len(mrows)} | " + " | ".join(cells) + " |")
+
+        # Statistical comparison across methods
         if len(method_map) >= 2:
             try:
                 method_names = sorted(method_map)
+                stat_metrics = (
+                    [("hw.functional_pass", "functional_pass"),
+                     ("hw.perf_ratio", "perf_ratio")]
+                    if is_gen else
+                    [("hw.localization_recall", "recall"),
+                     ("hw.localization_precision", "precision")]
+                )
                 lines += ["", "## Statistical comparison (Welch t-test)", ""]
-                for metric_key, metric_label in [
-                    ("hw.localization_recall", "recall"),
-                    ("hw.localization_precision", "precision"),
-                ]:
+                for metric_key, metric_label in stat_metrics:
                     lines += [f"### {metric_label}", ""]
                     lines += [
                         "| A | B | t | p | sig | Cohen's d | CI_A | CI_B |",
@@ -203,10 +313,8 @@ class HardwareBenchmarkSuite(EvalSuite):
                     ]
                     for i, ma in enumerate(method_names):
                         for mb in method_names[i+1:]:
-                            a = [r[metric_key] for r in method_map[ma]
-                                 if isinstance(r.get(metric_key), (int, float))]
-                            b = [r[metric_key] for r in method_map[mb]
-                                 if isinstance(r.get(metric_key), (int, float))]
+                            a = _nums(method_map[ma], metric_key)
+                            b = _nums(method_map[mb], metric_key)
                             t, p = welch_ttest(a, b)
                             d = effect_size(a, b)
                             ci_a = confidence_interval(a)
