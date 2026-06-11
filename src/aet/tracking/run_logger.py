@@ -758,6 +758,216 @@ class EvalRunLogger:
         }, stage="eval", actor="oracle")
 
     # ------------------------------------------------------------------
+    # Eval lifecycle events
+
+    def log_eval_start(
+        self,
+        eval_type: str = "public",
+        iteration: int | None = None,
+    ) -> None:
+        self._local._log_event_rich("eval.start", {
+            "eval_type": eval_type, "iteration": iteration,
+        }, stage="evaluation", actor="evaluator")
+
+    def log_eval_stage_result(
+        self,
+        stage: str,
+        passed: bool,
+        score: float | None = None,
+        max_score: float | None = None,
+        iteration: int | None = None,
+    ) -> None:
+        self._local._log_event_rich("eval.stage_result", {
+            "stage": stage, "passed": passed,
+            "score": score, "max_score": max_score, "iteration": iteration,
+        }, stage="evaluation", actor="evaluator")
+
+    def log_eval_assertion_result(
+        self,
+        assertion: str,
+        passed: bool,
+        cycle: int | None = None,
+        expected: str | None = None,
+        observed: str | None = None,
+        contract_id: str | None = None,
+    ) -> None:
+        self._local._log_event_rich("eval.assertion_result", {
+            "assertion": assertion, "passed": passed,
+            "cycle": cycle, "expected": expected,
+            "observed": observed, "contract_id": contract_id,
+        }, stage="evaluation", actor="evaluator")
+
+    def log_eval_coverage_result(
+        self,
+        coverage_point: str,
+        covered: int,
+        total: int,
+        missing: list | None = None,
+    ) -> None:
+        self._local._log_event_rich("eval.coverage_result", {
+            "coverage_point": coverage_point,
+            "covered": covered, "total": total,
+            "coverage_rate": covered / total if total > 0 else 0.0,
+            "missing": missing or [],
+        }, stage="evaluation", actor="evaluator")
+
+    def log_eval_end(
+        self,
+        total_passed: int,
+        total_tests: int,
+        score: float | None = None,
+        eval_type: str = "public",
+    ) -> None:
+        pass_rate = total_passed / total_tests if total_tests > 0 else 0.0
+        self._local._log_event_rich("eval.end", {
+            "eval_type": eval_type,
+            "total_passed": total_passed, "total_tests": total_tests,
+            "pass_rate": pass_rate, "score": score,
+        }, stage="evaluation", actor="evaluator")
+        self._local.log_metric(f"eval.{eval_type}.pass_rate", pass_rate)
+        if score is not None:
+            self._local.log_metric(f"eval.{eval_type}.score", score)
+
+    # ------------------------------------------------------------------
+    # Synthesis / PPA events
+
+    def log_synth_start(
+        self,
+        tool: str = "yosys",
+        target_library: str | None = None,
+        clock_target_ns: float | None = None,
+    ) -> None:
+        self._local._log_event_rich("synth.start", {
+            "tool": tool,
+            "target_library": target_library,
+            "clock_target_ns": clock_target_ns,
+        }, stage="synthesis", actor="tool")
+
+    def log_ppa(
+        self,
+        area_um2: float | None = None,
+        cell_count: int | None = None,
+        critical_path_ns: float | None = None,
+        slack_ns: float | None = None,
+        power_uw: float | None = None,
+        frequency_mhz: float | None = None,
+        tool: str | None = None,
+        warnings: int = 0,
+        ppa_validity: str = "functional_pass_required",
+    ) -> None:
+        payload = {
+            "area_um2": area_um2, "cell_count": cell_count,
+            "critical_path_ns": critical_path_ns, "slack_ns": slack_ns,
+            "power_uw": power_uw, "frequency_mhz": frequency_mhz,
+            "tool": tool, "warnings": warnings, "ppa_validity": ppa_validity,
+        }
+        self._local._log_event_rich("ppa.report", payload,
+                                    stage="synthesis", actor="tool")
+        for key, val in [("ppa.area_um2", area_um2), ("ppa.cell_count", cell_count),
+                         ("ppa.critical_path_ns", critical_path_ns),
+                         ("ppa.slack_ns", slack_ns), ("ppa.power_uw", power_uw),
+                         ("ppa.frequency_mhz", frequency_mhz)]:
+            if val is not None:
+                self._local.log_metric(key, val)
+
+    # ------------------------------------------------------------------
+    # Run error / timeout events
+
+    def log_run_timeout(self, reason: str = "", elapsed_s: float | None = None) -> None:
+        self._local._log_event_rich("run.timeout", {
+            "reason": reason, "elapsed_s": elapsed_s,
+        }, stage="teardown", actor="system")
+
+    def log_run_error(self, error_type: str = "", detail: str = "") -> None:
+        self._local._log_event_rich("run.error", {
+            "error_type": error_type, "detail": detail,
+        }, stage="teardown", actor="system")
+
+    # ------------------------------------------------------------------
+    # File lifecycle events
+
+    def log_file_read(
+        self,
+        path: str,
+        sha256: str | None = None,
+        size_bytes: int | None = None,
+    ) -> None:
+        self._local._log_event_rich("file.read", {
+            "path": path, "sha256": sha256, "size_bytes": size_bytes,
+        }, stage="editing", actor="agent", input_refs=[path])
+
+    def log_file_delete(
+        self,
+        path: str,
+        sha256_before: str | None = None,
+    ) -> None:
+        self._local._log_event_rich("file.delete", {
+            "path": path, "sha256_before": sha256_before,
+        }, stage="editing", actor="agent")
+
+    # ------------------------------------------------------------------
+    # Git events
+
+    def log_git_commit(
+        self,
+        sha: str,
+        message: str = "",
+        files_changed: int = 0,
+        additions: int = 0,
+        deletions: int = 0,
+    ) -> None:
+        self._local._log_event_rich("git.commit", {
+            "sha": sha, "message": message,
+            "files_changed": files_changed,
+            "additions": additions, "deletions": deletions,
+        }, stage="editing", actor="agent")
+
+    def log_git_diff(
+        self,
+        files_changed: int = 0,
+        additions: int = 0,
+        deletions: int = 0,
+        ref_before: str | None = None,
+        ref_after: str | None = None,
+    ) -> None:
+        self._local._log_event_rich("git.diff", {
+            "files_changed": files_changed,
+            "additions": additions, "deletions": deletions,
+            "ref_before": ref_before, "ref_after": ref_after,
+        }, stage="editing", actor="system")
+
+    # ------------------------------------------------------------------
+    # Human intervention sub-types
+
+    def log_human_clarification(self, question: str, response: str = "") -> None:
+        self._local._log_event_rich("human.clarification", {
+            "question": question, "response": response,
+        }, stage="planning", actor="human")
+
+    def log_human_patch(
+        self,
+        file_path: str,
+        description: str = "",
+        iteration: int | None = None,
+    ) -> None:
+        self._local._log_event_rich("human.patch", {
+            "file_path": file_path, "description": description,
+            "iteration": iteration,
+        }, stage="editing", actor="human")
+        self._local.log_metric("human.patch_count", 1)
+
+    def log_human_override(
+        self,
+        what: str,
+        why: str = "",
+        artifact_affected: str | None = None,
+    ) -> None:
+        self._local._log_event_rich("human.override", {
+            "what": what, "why": why,
+            "artifact_affected": artifact_affected,
+        }, stage="evaluation", actor="human")
+
+    # ------------------------------------------------------------------
     # Utility writers
 
     def write_run_record(self, extra: dict | None = None) -> Path:
@@ -802,6 +1012,60 @@ class EvalRunLogger:
             summary.update(extra)
         path = metrics_dir / "summary_metrics.json"
         path.write_text(json.dumps(summary, indent=2, default=str))
+        return path
+
+    def write_eval_report(
+        self,
+        tests: list[dict],
+        contracts: list[dict] | None = None,
+        assertions: list[dict] | None = None,
+        coverage: list[dict] | None = None,
+        extra: dict | None = None,
+    ) -> Path:
+        """Write eval_report.json: per-test, per-contract, per-assertion, coverage."""
+        from datetime import datetime, timezone
+        run_path = self._config.run_path
+        run_path.mkdir(parents=True, exist_ok=True)
+        import json
+        report: dict = {
+            "schema_version": "1.0",
+            "run_id": self._config.run_id,
+            "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+            "tests": tests,
+            "contracts": contracts or [],
+            "assertions": assertions or [],
+            "coverage": coverage or [],
+        }
+        if extra:
+            report.update(extra)
+        path = run_path / "eval_report.json"
+        path.write_text(json.dumps(report, indent=2, default=str))
+        return path
+
+    def write_metrics_structured(
+        self,
+        cost: dict,
+        quality: dict,
+        process: dict,
+        extra: dict | None = None,
+    ) -> Path:
+        """Write metrics.json with cost/quality/process structure per spec."""
+        from datetime import datetime, timezone
+        run_path = self._config.run_path
+        run_path.mkdir(parents=True, exist_ok=True)
+        import json
+        metrics: dict = {
+            "schema_version": "1.0",
+            "run_id": self._config.run_id,
+            "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+            "cost": cost,
+            "quality": quality,
+            "process": process,
+        }
+        if extra:
+            metrics.update(extra)
+        path = run_path / "metrics.json"
+        path.write_text(json.dumps(metrics, indent=2, default=str))
         return path
 
     # ------------------------------------------------------------------

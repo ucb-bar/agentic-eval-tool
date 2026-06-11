@@ -38,15 +38,32 @@ def _sig_marker(p) -> str:
 class HardwareBenchmarkSuite(EvalSuite):
 
     def init_run(self, spec, paths, logger) -> None:
-        hw_dir = paths.run_path / "hw_benchmark"
-        hw_dir.mkdir(parents=True, exist_ok=True)
-        (paths.run_path / "metrics").mkdir(parents=True, exist_ok=True)
-        (paths.run_path / "logs").mkdir(parents=True, exist_ok=True)
-        (hw_dir / "README.md").write_text(
+        run_path = paths.run_path
+        # Core output dirs (legacy)
+        (run_path / "hw_benchmark").mkdir(parents=True, exist_ok=True)
+        (run_path / "metrics").mkdir(parents=True, exist_ok=True)
+        (run_path / "logs").mkdir(parents=True, exist_ok=True)
+        # Spec-required artifact subdirectories
+        for subdir in (
+            "artifacts/prompts", "artifacts/responses", "artifacts/diffs",
+            "artifacts/rtl", "artifacts/tb", "artifacts/logs",
+            "artifacts/traces", "artifacts/waveforms", "artifacts/synth",
+            "artifacts/ppa",
+        ):
+            (run_path / subdir).mkdir(parents=True, exist_ok=True)
+        # Snapshot dirs (populated by bridge if available)
+        (run_path / "snapshots" / "initial_repo").mkdir(parents=True, exist_ok=True)
+        (run_path / "snapshots" / "final_repo").mkdir(parents=True, exist_ok=True)
+        # Hashes dir (artifact_manifest.json lives here too)
+        (run_path / "hashes").mkdir(parents=True, exist_ok=True)
+        # README
+        from datetime import datetime, timezone
+        (run_path / "hw_benchmark" / "README.md").write_text(
             f"# Hardware Benchmark Run: {spec.run_id}\n\n"
             f"- Benchmark: {getattr(spec, 'benchmark', 'abc-testing') or 'abc-testing'}\n"
             f"- Variant: {getattr(spec, 'variant', None) or spec.target or ''}\n"
             f"- Tool tier: {getattr(spec, 'tool_tier', None) or spec.method or ''}\n"
+            f"- Level: {getattr(spec, 'benchmark_level', None) or 'B0'}\n"
             f"- Started: {datetime.now(timezone.utc).isoformat()}\n"
         )
         if logger:

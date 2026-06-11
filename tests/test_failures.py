@@ -52,11 +52,13 @@ def test_failure_record_from_dict_round_trip():
 
 
 def test_failure_category_exhaustive():
-    expected = {
+    # Legacy categories must still be present (backward compat)
+    legacy = {
         "syntax_error", "elaboration_error", "simulation_mismatch",
         "testbench_timeout", "tool_crash", "taint", "runner_crash", "unknown",
     }
-    assert {c.value for c in FailureCategory} == expected
+    values = {c.value for c in FailureCategory}
+    assert legacy <= values, f"Missing legacy categories: {legacy - values}"
 
 
 def test_failure_record_unique_ids():

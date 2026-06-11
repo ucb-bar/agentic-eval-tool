@@ -32,3 +32,14 @@ class RunSpec:
     tb_version_hash: str | None = None
     repo_initial_commit: str | None = None
     repo_final_commit: str | None = None
+    # Run configuration metadata (spec-required)
+    benchmark_level: str | None = None          # B0 / B1 / B2
+    baseline_variant: str | None = None
+    model_strategy: str | None = None
+    time_budget_minutes: int | None = None
+    token_budget: int | None = None
+    human_intervention_policy: str = "none"     # none | allowed | required
+    machine_spec_version: str | None = None
+    ir_version: str | None = None
+    scaffold_version: str | None = None
+    hidden_eval_version: str | None = None

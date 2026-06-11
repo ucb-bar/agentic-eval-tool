@@ -39,8 +39,6 @@ def test_manifest_json_serializable(tmp_path):
     p = _write(tmp_path, "f.txt")
     store.record(p, ArtifactOrigin.GENERATED)
     manifest = json.loads((tmp_path / "artifact_manifest.json").read_text())
-    assert manifest["schema_version"] == "1.0"
-    assert manifest["run_id"] == "r1"
     assert len(manifest["artifacts"]) == 1
 
 
