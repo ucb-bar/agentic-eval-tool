@@ -1,0 +1,196 @@
+"""Canonical agentic-trajectory data-model — the spine of ``aet.trajectory``.
+
+A ``RunTrajectory`` is the repo-agnostic record of *what an agent did over time* while
+producing a deliverable: cumulative token consumption (input / output / cache), cumulative
+cost, an activity timeline (thinking / reading / writing / bash / long tool-waits), and
+test-pass milestones from an external oracle. It is the single structure every consumer reads
+— the batch importer, the native recorder, the live monitor, and the plots.
+
+Design invariants:
+  * **Pure stdlib, no numpy.** Every field is a plain list/scalar so this module stays a
+    dependency-free core; array smoothing for plots lives in ``aet.viz``.
+  * **Append-only.** ``points``/``bands``/``milestones``/``rounds`` are grown incrementally, so
+    the exact same object is built by a completed-run importer and by a live stream, one point
+    at a time. There is one code path, not two.
+  * **Self-describing.** ``classifier_config`` is carried on the trajectory so a reader can see
+    (and reproduce) how activities were categorised — the harness never hardcodes tool rules.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+SCHEMA_VERSION = "1.0"
+
+
+@dataclass
+class TrajectoryPoint:
+    """One sample on the cumulative token/cost curves (one agent message/turn)."""
+
+    t_s: float                       # seconds from trajectory start (t=0 at round 0)
+    cum_input_tokens: float = 0.0
+    cum_output_tokens: float = 0.0
+    cum_cache_tokens: float = 0.0    # cache_read + cache_creation (matches load_arm's T_ca)
+    cum_cost_usd: float = 0.0        # authoritative at round ends; provisional mid-stream
+    round_index: int = 0
+    provisional_cost: bool = False   # True while streaming before the round's result event
+
+    @property
+    def cum_total_tokens(self) -> float:
+        return self.cum_input_tokens + self.cum_output_tokens + self.cum_cache_tokens
+
+
+@dataclass
+class ActivityBand:
+    """A contiguous interval spent in one activity category (drives the activity-share view)."""
+
+    t0_s: float
+    t1_s: float
+    category: str                    # "think" | "read" | "write" | "bash" | "tool" (extensible)
+    tool_name: str = ""
+    weight: float = 1.0              # classifier weight (long waits weigh more in the share)
+    round_index: int = 0
+    is_error: bool = False
+
+    @property
+    def duration_s(self) -> float:
+        return max(0.0, self.t1_s - self.t0_s)
+
+
+@dataclass
+class TestMilestone:
+    """An external-oracle test-pass reading at a wall time (e.g. selfcheck 13 → 17 → 20)."""
+
+    __test__ = False   # not a pytest test class despite the "Test" prefix
+
+    t_s: float
+    n_passed: int
+    n_total: int
+    scope: str = "all"
+    round_index: int | None = None
+    source: str = ""                 # "selfcheck_log" | "qa_verdict" | ...
+
+
+@dataclass
+class RoundBoundary:
+    """One agent invocation ("round") — its wall span + billed totals + QA verdict."""
+
+    index: int
+    t_start_s: float
+    t_end_s: float
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_tokens: int = 0
+    n_passed: int | None = None
+    n_total: int | None = None
+    session_id: str = ""
+
+    @property
+    def duration_s(self) -> float:
+        return max(0.0, self.t_end_s - self.t_start_s)
+
+
+@dataclass
+class RunTrajectory:
+    """The full canonical trajectory for one run — built once, read by every consumer."""
+
+    run_id: str = ""
+    source: str = ""                 # "aet-native" | "import:capsule-bench" | "stream" ...
+    model: str = ""
+    schema_version: str = SCHEMA_VERSION
+    duration_s: float = 0.0          # active wall = sum of round durations
+    num_rounds: int = 0
+    provisional: bool = False        # True while streaming before a terminal result event
+    points: list[TrajectoryPoint] = field(default_factory=list)
+    bands: list[ActivityBand] = field(default_factory=list)
+    milestones: list[TestMilestone] = field(default_factory=list)
+    rounds: list[RoundBoundary] = field(default_factory=list)
+    final_cost_usd: float = 0.0
+    final_input_tokens: int = 0
+    final_output_tokens: int = 0
+    final_cache_tokens: int = 0
+    classifier_config: dict = field(default_factory=dict)
+
+    # ------------------------------------------------------------------ serialization
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "source": self.source,
+            "model": self.model,
+            "duration_s": self.duration_s,
+            "num_rounds": self.num_rounds,
+            "provisional": self.provisional,
+            "final_cost_usd": self.final_cost_usd,
+            "final_input_tokens": self.final_input_tokens,
+            "final_output_tokens": self.final_output_tokens,
+            "final_cache_tokens": self.final_cache_tokens,
+            "classifier_config": self.classifier_config,
+            "points": [asdict(p) for p in self.points],
+            "bands": [asdict(b) for b in self.bands],
+            "milestones": [asdict(m) for m in self.milestones],
+            "rounds": [asdict(r) for r in self.rounds],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RunTrajectory":
+        return cls(
+            run_id=d.get("run_id", ""),
+            source=d.get("source", ""),
+            model=d.get("model", ""),
+            schema_version=d.get("schema_version", SCHEMA_VERSION),
+            duration_s=float(d.get("duration_s", 0.0)),
+            num_rounds=int(d.get("num_rounds", 0)),
+            provisional=bool(d.get("provisional", False)),
+            final_cost_usd=float(d.get("final_cost_usd", 0.0)),
+            final_input_tokens=int(d.get("final_input_tokens", 0)),
+            final_output_tokens=int(d.get("final_output_tokens", 0)),
+            final_cache_tokens=int(d.get("final_cache_tokens", 0)),
+            classifier_config=d.get("classifier_config", {}) or {},
+            points=[TrajectoryPoint(**p) for p in d.get("points", [])],
+            bands=[ActivityBand(**b) for b in d.get("bands", [])],
+            milestones=[TestMilestone(**m) for m in d.get("milestones", [])],
+            rounds=[RoundBoundary(**r) for r in d.get("rounds", [])],
+        )
+
+    def to_json(self, path: str | Path) -> Path:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(self.to_dict(), indent=2) + "\n")
+        return p
+
+    @classmethod
+    def from_json(cls, path: str | Path) -> "RunTrajectory":
+        return cls.from_dict(json.loads(Path(path).read_text()))
+
+    @classmethod
+    def from_run_dir(cls, run_path: str | Path) -> "RunTrajectory":
+        """Reconstruct from a canonical aet run dir (``metrics/trajectory.json`` or ``logs/``).
+
+        Prefers the fast-path artifact; falls back to replaying ``logs/`` events + step-metrics.
+        The ``logs/`` reconstruction lives in ``aet.trajectory.recording`` (imported lazily to
+        keep this module import-light)."""
+        run_path = Path(run_path)
+        fast = run_path / "metrics" / "trajectory.json"
+        if fast.is_file():
+            return cls.from_json(fast)
+        from aet.trajectory.recording import trajectory_from_logs
+        return trajectory_from_logs(run_path)
+
+    # ------------------------------------------------------------------ derived views
+    def token_series(self) -> dict[str, list[float]]:
+        """Plain-list series for plotting: t (minutes) + cumulative token/spend curves."""
+        return {
+            "t": [p.t_s / 60.0 for p in self.points],
+            "input": [p.cum_input_tokens for p in self.points],
+            "output": [p.cum_output_tokens for p in self.points],
+            "cache": [p.cum_cache_tokens for p in self.points],
+            "total": [p.cum_total_tokens for p in self.points],
+            "spend": [p.cum_cost_usd for p in self.points],
+        }
+
+    def milestone_series(self) -> list[tuple[float, int]]:
+        """(minute, n_passed) pairs, sorted by time — the gold test-pass steps."""
+        return sorted(((m.t_s / 60.0, m.n_passed) for m in self.milestones), key=lambda x: x[0])

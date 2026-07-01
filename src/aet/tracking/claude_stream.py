@@ -85,6 +85,7 @@ class TurnUsage:
     finish_reasons: list[str] = field(default_factory=list)
     reasoning_text: str = ""   # assistant text blocks from this turn (no tool calls = planning turn)
     start_offset_s: float = 0.0  # seconds from stream start; used for OTel inference span timestamps
+    has_thinking: bool = False   # this turn contained an extended-thinking content block
 
     @property
     def total_input_tokens(self) -> int:
@@ -182,13 +183,13 @@ def parse_timestamped_stream(
             for block in ev.get("message", {}).get("content", []):
                 if block.get("type") == "tool_use":
                     tid = block.get("id", "")
-                    if tid:
+                    if tid and tid not in tool_use_ts:   # first (of any duplicate) emission wins
                         tool_use_ts[tid] = ts
         elif ev.get("type") == "user":
             for block in ev.get("message", {}).get("content", []):
                 if block.get("type") == "tool_result":
                     tid = block.get("tool_use_id", "")
-                    if tid:
+                    if tid and tid not in tool_result_ts:
                         tool_result_ts[tid] = ts
 
     text = "\n".join(line for _, line in lines_with_ts)
@@ -197,8 +198,22 @@ def parse_timestamped_stream(
     # Patch in timing, turn_index, and start_offset_s
     base_ts = lines_with_ts[0][0] if lines_with_ts else 0.0
     stream_end_ts = lines_with_ts[-1][0] if lines_with_ts else 0.0
-    turn_boundaries: list[float] = [ts for ts, line in lines_with_ts
-                                     if _is_turn_boundary(line)]
+    # turn boundaries dedup by message id (first emission), to stay aligned with the deduped
+    # turn_usage that parse_stream produces for re-emitting session-log transcripts.
+    turn_boundaries: list[float] = []
+    _seen_turn_ids: set[str] = set()
+    for ts, line in lines_with_ts:
+        if not _is_turn_boundary(line):
+            continue
+        try:
+            mid = json.loads(line).get("message", {}).get("id", "")
+        except Exception:
+            mid = ""
+        if mid and mid in _seen_turn_ids:
+            continue
+        if mid:
+            _seen_turn_ids.add(mid)
+        turn_boundaries.append(ts)
 
     # Patch start_offset_s onto each TurnUsage (assistant message start time)
     for i, tu in enumerate(result.turn_usage):
@@ -241,6 +256,7 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
     model = ""
     success = False
     turn_num = 0
+    seen_msg_ids: set[str] = set()   # session-log transcripts re-emit a message id; count once
 
     for raw_line in stream_text.strip().split("\n"):
         line = raw_line.strip()
@@ -260,8 +276,13 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
             msg = event.get("message", {})
             if not model:
                 model = msg.get("model", "")
+            mid = msg.get("id", "")
+            # A session-log transcript re-emits the same assistant message (same id, identical
+            # usage, different event uuid). Count each turn — and its token usage — exactly once.
+            is_dup = bool(mid) and mid in seen_msg_ids
+            if mid:
+                seen_msg_ids.add(mid)
             usage = msg.get("usage", {})
-            turn_num += 1
             # Collect text blocks first — used for both TurnUsage and ToolCall
             turn_text_blocks: list[str] = []
             for block in msg.get("content", []):
@@ -270,17 +291,22 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
                     if t:
                         turn_text_blocks.append(t)
             reasoning = " | ".join(turn_text_blocks)[:600]
-            turn_usage.append(TurnUsage(
-                turn=turn_num,
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
-                cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
-                model=msg.get("model", model),
-                message_id=msg.get("id", ""),
-                finish_reasons=[msg["stop_reason"]] if msg.get("stop_reason") else [],
-                reasoning_text=reasoning,
-            ))
+            has_thinking = any(b.get("type") == "thinking" for b in msg.get("content", []))
+            if not is_dup:
+                turn_num += 1
+                turn_usage.append(TurnUsage(
+                    turn=turn_num,
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
+                    cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
+                    model=msg.get("model", model),
+                    message_id=mid,
+                    finish_reasons=[msg["stop_reason"]] if msg.get("stop_reason") else [],
+                    reasoning_text=reasoning,
+                    has_thinking=has_thinking,
+                ))
+            # tool_use blocks dedup by tool_use_id, so duplicate emissions collapse harmlessly
             for block in msg.get("content", []):
                 if block.get("type") == "tool_use":
                     tc = ToolCall(
@@ -289,7 +315,7 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
                         input=block.get("input", {}),
                         reasoning_before=reasoning,
                     )
-                    if tc.tool_use_id:
+                    if tc.tool_use_id and tc.tool_use_id not in tool_calls_by_id:
                         tool_calls_by_id[tc.tool_use_id] = tc
 
         elif etype == "user":

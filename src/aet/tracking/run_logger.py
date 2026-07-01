@@ -111,6 +111,42 @@ class EvalRunLogger:
         self._local.log_event(name, payload)
 
     # ------------------------------------------------------------------
+    # trajectory recording — thin wrappers over the primitives above so an agentic
+    # RunTrajectory is reconstructable from canonical logs/ (no new backend/format).
+    # ------------------------------------------------------------------
+    def log_trajectory_point(self, index: int, t_s: float,
+                             cum_input: float, cum_output: float, cum_cache: float,
+                             cum_cost: float, round_index: int = 0,
+                             provisional_cost: bool = False) -> None:
+        """One cumulative sample as a family of step-metrics keyed by point ``index``."""
+        self.log_metric_step("aet.traj.t_s", t_s, step=index)
+        self.log_metric_step("aet.traj.cum_input_tokens", cum_input, step=index)
+        self.log_metric_step("aet.traj.cum_output_tokens", cum_output, step=index)
+        self.log_metric_step("aet.traj.cum_cache_tokens", cum_cache, step=index)
+        self.log_metric_step("aet.traj.cum_total_tokens", cum_input + cum_output + cum_cache,
+                             step=index)
+        self.log_metric_step("aet.traj.cum_cost_usd", cum_cost, step=index)
+        self.log_metric_step("aet.traj.round_index", round_index, step=index)
+        self.log_metric_step("aet.traj.provisional_cost", 1.0 if provisional_cost else 0.0,
+                             step=index)
+
+    def log_test_milestone(self, t_s: float, n_passed: int, n_total: int,
+                           round_index: int | None = None, scope: str = "all") -> None:
+        """An external-oracle test-pass reading (metric for the curve + event for the time)."""
+        self._local._log_event_rich(
+            "aet.traj.milestone",
+            {"t_s": t_s, "n_passed": n_passed, "n_total": n_total,
+             "scope": scope, "round_index": round_index},
+            stage="eval", actor="oracle")
+
+    def log_round_boundary(self, rb) -> None:
+        """One agent round's wall span + billed totals + QA verdict."""
+        from dataclasses import asdict, is_dataclass
+        payload = asdict(rb) if is_dataclass(rb) else dict(rb)
+        self._local._log_event_rich("aet.traj.round", payload,
+                                    stage="agent_action", actor="harness")
+
+    # ------------------------------------------------------------------
     def log_artifact(self, path: Path, artifact_path: str | None = None) -> None:
         self._local.log_artifact(path, artifact_path)
         if self._mlflow:

@@ -5,6 +5,35 @@ All notable changes to `aet` are recorded here.
 ## [Unreleased]
 
 ### Added
+- **Agentic trajectory recording (`aet.trajectory`)** — canonical, repo-agnostic record of what an
+  agent did over time: cumulative tokens (input/output/cache), cumulative cost, an activity timeline
+  (thinking / reading / writing / bash / long tool-waits), and external-oracle test-pass milestones.
+  `RunTrajectory` is pure-stdlib and built the same way from a completed run or a live stream via
+  `append_round` (one code path). Timing comes from `claude_stream.parse_timestamped_stream` (real
+  per-tool offsets, superseding the old within-round weighting). The activity classifier is pluggable
+  config (`ActivityConfig`/`LongWaitRule`; the verilator/CIRCT long-wait rule is data via
+  `capsule_bench_config`, never hardcoded), so the core stays generic.
+  - **Native recording** — `EvalRunLogger.log_trajectory_point` / `log_test_milestone` /
+    `log_round_boundary` emit the trajectory through the existing tracking primitives, so it is
+    reconstructable from canonical `logs/` (`RunTrajectory.from_run_dir`), plus a
+    `metrics/trajectory.json` fast-path artifact.
+  - **Importer** — `aet import --source capsule-bench --raw <dir> [--into <run>]` ingests existing
+    agentic runs (transcripts + qa verdicts + selfcheck log) into a canonical trajectory; `--into`
+    materializes a full aet run so old data is queryable via `aet runs`/`aet show`/`aet plot`.
+    Handles per-round `wall_offset_s` resets in the self-check log (cumulative-clock reconstruction).
+  - **Live monitor** — `aet monitor --attach <transcript>` tails an in-flight `stream-json` transcript,
+    updating the same data-model incrementally; cost is `~$…(provisional)` until the terminal result
+    event, then flips to the billed number. Headless-first (one rewriting status line).
+- **Visualization (`aet.viz`, optional `[viz]` extra)** — house-style trajectory plots consuming only
+  the data-model. `aet plot <run|json> [--comparison …]` and `compare --plots` render per-run and
+  stacked comparison figures (cumulative tokens on a log axis, spend twin-axis, activity-share
+  background bands, gold test-pass milestones). matplotlib/numpy stay behind the extra with a friendly
+  `pip install 'aet[viz]'` hint; `import`/`monitor` work without it.
+- **`claude_stream` correctness (for full session-log transcripts)** — the parser now dedups
+  re-emitted assistant messages by id (session logs emit the same message 2–3× with identical
+  usage) so tokens are counted once, and consumers can split a transcript at each `result` event
+  (a file may concatenate several invocations). Together these make imported token/cost totals
+  match the authoritative per-model billing exactly. `TurnUsage.has_thinking` added.
 - **Multi-run statistics** — `compare()` now writes `statistical_comparison.md` with Welch's
   t-test, 95% confidence intervals, and Cohen's d effect size for every key metric across
   methods. Significance markers (`***` / `**` / `*` / `ns`) included.

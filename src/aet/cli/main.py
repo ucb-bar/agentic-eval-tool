@@ -298,6 +298,33 @@ def _cmd_compare(args) -> None:
 
     print(f"[aet] Compare complete: wrote report to {report_dir}")
 
+    # Optional trajectory comparison plot (guarded: needs the [viz] extra + trajectory data)
+    if getattr(args, "plots", False):
+        _write_comparison_plot(run_paths, report_dir)
+
+
+def _write_comparison_plot(run_paths, report_dir: Path) -> None:
+    from aet.trajectory.model import RunTrajectory
+    trajs = []
+    for rp in sorted(run_paths):
+        traj_json = rp / "metrics" / "trajectory.json"
+        if traj_json.is_file():
+            try:
+                trajs.append(RunTrajectory.from_json(traj_json))
+            except Exception:
+                continue
+    if not trajs:
+        print("[aet] --plots: no run has metrics/trajectory.json; skipping trajectory plot")
+        return
+    try:
+        from aet.viz.trajectory_plot import plot_comparison
+    except ImportError as e:
+        print(f"[aet] --plots: {e}", file=sys.stderr)
+        return
+    out = report_dir / "trajectory_comparison.png"
+    plot_comparison(trajs).savefig(out, dpi=200, bbox_inches="tight")
+    print(f"[aet] wrote {out}  ({len(trajs)} runs)")
+
 
 # ---------------------------------------------------------------------------
 # run-suite
@@ -653,6 +680,157 @@ def _cmd_show(args) -> None:
 
 
 # ---------------------------------------------------------------------------
+# import — ingest an existing agentic run into a canonical trajectory
+# ---------------------------------------------------------------------------
+
+def _cmd_import(args) -> None:
+    from aet.trajectory.classify import ActivityConfig
+    from aet.trajectory.importers import get_importer
+
+    importer = get_importer(args.source)
+    cfg = ActivityConfig.from_json_file(args.classifier_config) if args.classifier_config else None
+    circt = None
+    if getattr(args, "circt", None) is True:
+        circt = True
+    elif getattr(args, "no_circt", False):
+        circt = False
+
+    traj = importer(
+        args.raw,
+        classifier_config=cfg,
+        circt=circt,
+        milestone_time=args.milestone_time,
+        run_id=args.run_id or "",
+    )
+
+    out = Path(args.out) if args.out else Path(args.raw) / "trajectory.json"
+    traj.to_json(out)
+    print(f"[aet] imported {args.source} run '{traj.run_id}': "
+          f"{traj.num_rounds} rounds, {len(traj.points)} points, "
+          f"{len(traj.milestones)} milestones, {len(traj.bands)} activity bands")
+    print(f"[aet]   final: {traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens:,} tokens, "
+          f"${traj.final_cost_usd:.4f}, {traj.duration_s / 60.0:.1f} min")
+    if traj.milestones:
+        prog = " → ".join(str(m.n_passed) for m in sorted(traj.milestones, key=lambda m: m.t_s))
+        print(f"[aet]   test-pass milestones: {prog} / {traj.milestones[-1].n_total}")
+    print(f"[aet] wrote {out}")
+
+    if getattr(args, "into", None):
+        from aet.trajectory.recording import materialize_run
+        run_path = materialize_run(traj, Path(args.into))
+        print(f"[aet] materialized aet run at {run_path}")
+
+
+# ---------------------------------------------------------------------------
+# plot — render a run's trajectory (requires the [viz] extra)
+# ---------------------------------------------------------------------------
+
+def _load_trajectory(path: Path):
+    """A trajectory.json file, or a run dir (fast-path artifact else logs/ reconstruction)."""
+    from aet.trajectory.model import RunTrajectory
+    path = Path(path)
+    if path.is_file():
+        return RunTrajectory.from_json(path)
+    return RunTrajectory.from_run_dir(path)
+
+
+def _cmd_plot(args) -> None:
+    try:
+        from aet.viz.trajectory_plot import plot_trajectory, plot_comparison
+    except ImportError as e:
+        print(f"[aet] {e}", file=sys.stderr)
+        sys.exit(1)
+
+    main_traj = _load_trajectory(Path(args.run))
+    if args.comparison:
+        trajs = [main_traj] + [_load_trajectory(Path(p)) for p in args.comparison]
+        fig = plot_comparison(trajs, log_tokens=not args.linear_tokens)
+    else:
+        fig = plot_trajectory(main_traj, log_tokens=not args.linear_tokens,
+                              show_spend=not args.no_spend)
+    out = Path(args.out) if args.out else Path(args.run).with_suffix(".png")
+    fig.savefig(out, dpi=args.dpi, bbox_inches="tight")
+    print(f"[aet] wrote {out}")
+
+
+# ---------------------------------------------------------------------------
+# monitor — live activity view of an in-flight agent session
+# ---------------------------------------------------------------------------
+
+def _selfcheck_tests_passed(path) -> tuple[int, int] | None:
+    """Best all-scope (n_passed, n_total) from a self-check log, for a live tests-passed readout."""
+    p = Path(path)
+    if not p.is_file():
+        return None
+    best = (0, 0)
+    for line in p.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = __import__("json").loads(line)
+        except Exception:
+            continue
+        if str(r.get("capsules")) == "all" and (r.get("n_capsules") or 0) >= 20:
+            if (r.get("n_passed") or 0) >= best[0]:
+                best = (r.get("n_passed") or 0, r.get("n_capsules") or 0)
+    return best if best[1] else None
+
+
+def _monitor_classifier(args):
+    from aet.trajectory.classify import ActivityClassifier, ActivityConfig, capsule_bench_config
+    if args.classifier_config:
+        return ActivityClassifier(ActivityConfig.from_json_file(args.classifier_config))
+    if args.preset == "capsule-bench":
+        return ActivityClassifier(capsule_bench_config(circt=args.circt))
+    return ActivityClassifier()
+
+
+def _cmd_monitor(args) -> None:
+    from aet.trajectory.stream import TrajectoryStream
+
+    classifier = _monitor_classifier(args)
+    selfcheck = args.selfcheck
+
+    def _status(traj) -> str:
+        cur = traj.bands[-1].category if traj.bands else "—"
+        tok = traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens
+        cost = f"~${traj.final_cost_usd:.3f}(prov)" if traj.provisional else f"${traj.final_cost_usd:.3f}"
+        tests = ""
+        if selfcheck:
+            tp = _selfcheck_tests_passed(selfcheck)
+            if tp:
+                tests = f" | tests {tp[0]}/{tp[1]}"
+        return (f"[{traj.duration_s / 60.0:5.1f} min] {tok:>12,} tok | {cost:>16} "
+                f"| now: {cur:<6}{tests}")
+
+    last = {"traj": None}
+
+    def _on_update(traj):
+        last["traj"] = traj
+        print("\r" + _status(traj).ljust(90), end="", flush=True)
+
+    stream = TrajectoryStream(classifier=classifier, on_update=_on_update,
+                              flush_every=args.flush_every, run_id=Path(args.attach).stem)
+    traj = stream.attach_file(args.attach, poll_s=args.interval,
+                              follow=not args.no_follow, max_seconds=args.max_seconds)
+    print()  # end the rewriting status line
+    print(f"[aet] {'streaming ended (result event)' if not traj.provisional else 'stopped (still in flight)'}: "
+          f"{traj.num_rounds} round(s), {len(traj.points)} points, "
+          f"{traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens:,} tok, "
+          f"{'~$' if traj.provisional else '$'}{traj.final_cost_usd:.3f}, {traj.duration_s / 60.0:.1f} min")
+    if args.emit_json:
+        traj.to_json(args.emit_json)
+        print(f"[aet] wrote snapshot {args.emit_json}")
+    if getattr(args, "plot", None):
+        try:
+            from aet.viz.trajectory_plot import plot_trajectory
+            plot_trajectory(traj).savefig(args.plot, dpi=200)
+            print(f"[aet] wrote plot {args.plot}")
+        except ImportError as e:
+            print(f"[aet] {e}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -758,6 +936,12 @@ def main() -> None:
         default=False,
         help="Exclude smoke-test runs from comparison",
     )
+    p_compare.add_argument(
+        "--plots",
+        action="store_true",
+        default=False,
+        help="Also render a trajectory comparison plot (requires the [viz] extra)",
+    )
     _add_global_args(p_compare)
     _add_tracking_args(p_compare)
     p_compare.set_defaults(func=_cmd_compare)
@@ -854,6 +1038,85 @@ def main() -> None:
     p_baseline.set_defaults(func=_cmd_baseline)
 
     # ------------------------------------------------------------------
+    # import — ingest an existing agentic run into a canonical trajectory
+    # ------------------------------------------------------------------
+    p_import = subparsers.add_parser(
+        "import",
+        help="Import an existing agentic run into a canonical trajectory",
+    )
+    p_import.add_argument("--source", default="capsule-bench",
+                          help="Run layout to import (default: capsule-bench)")
+    p_import.add_argument("--raw", required=True, metavar="DIR",
+                          help="Path to the existing run directory")
+    p_import.add_argument("--circt", dest="circt", action="store_true", default=None,
+                          help="Treat as a CIRCT run (adds RTL-facts long-wait rules)")
+    p_import.add_argument("--no-circt", dest="no_circt", action="store_true", default=False,
+                          help="Force non-CIRCT classification")
+    p_import.add_argument("--classifier-config", metavar="JSON", default=None,
+                          help="Path to an ActivityConfig JSON (overrides the source default)")
+    p_import.add_argument("--milestone-time", choices=["proportional", "wallclock"],
+                          default="proportional",
+                          help="Map self-check milestones by proportion of active wall, or raw offset")
+    p_import.add_argument("--run-id", dest="run_id", default=None,
+                          help="Override the trajectory run_id (default: run dir name)")
+    p_import.add_argument("--out", metavar="PATH", default=None,
+                          help="Where to write trajectory.json (default: <raw>/trajectory.json)")
+    p_import.add_argument("--into", metavar="AET_RUN_DIR", default=None,
+                          help="Also materialize a canonical aet run dir (logs/ + trajectory.json)")
+    p_import.set_defaults(func=_cmd_import)
+
+    # ------------------------------------------------------------------
+    # plot — render a run's trajectory (requires the [viz] extra)
+    # ------------------------------------------------------------------
+    p_plot = subparsers.add_parser(
+        "plot",
+        help="Plot a run's trajectory (requires the [viz] extra)",
+    )
+    p_plot.add_argument("run", metavar="RUN_OR_JSON",
+                        help="A run directory or a trajectory.json file")
+    p_plot.add_argument("--out", metavar="PNG", default=None,
+                        help="Output image path (default: <run>.png)")
+    p_plot.add_argument("--comparison", nargs="+", metavar="RUN", default=None,
+                        help="Additional runs/trajectories to stack for comparison")
+    p_plot.add_argument("--linear-tokens", dest="linear_tokens", action="store_true",
+                        default=False, help="Use a linear token axis (default: log)")
+    p_plot.add_argument("--no-spend", dest="no_spend", action="store_true", default=False,
+                        help="Hide the cumulative-spend twin axis")
+    p_plot.add_argument("--dpi", type=int, default=200, help="Output DPI (default: 200)")
+    p_plot.set_defaults(func=_cmd_plot)
+
+    # ------------------------------------------------------------------
+    # monitor — live activity view of an in-flight agent session
+    # ------------------------------------------------------------------
+    p_monitor = subparsers.add_parser(
+        "monitor",
+        help="Live activity monitor tailing an in-flight stream-json transcript",
+    )
+    p_monitor.add_argument("--attach", required=True, metavar="TRANSCRIPT",
+                           help="Path to the stream-json transcript to tail")
+    p_monitor.add_argument("--preset", choices=["generic", "capsule-bench"], default="generic",
+                           help="Activity classifier preset (default: generic)")
+    p_monitor.add_argument("--circt", action="store_true", default=False,
+                           help="With --preset capsule-bench, add the CIRCT long-wait rules")
+    p_monitor.add_argument("--classifier-config", metavar="JSON", default=None,
+                           help="Path to an ActivityConfig JSON (overrides --preset)")
+    p_monitor.add_argument("--selfcheck", metavar="LOG", default=None,
+                           help="Path to a selfcheck_log.jsonl for a live tests-passed readout")
+    p_monitor.add_argument("--emit-json", dest="emit_json", metavar="PATH", default=None,
+                           help="Write a final trajectory snapshot as JSON")
+    p_monitor.add_argument("--plot", metavar="PNG", default=None,
+                           help="Render a plot at the end (requires the [viz] extra)")
+    p_monitor.add_argument("--interval", type=float, default=0.5,
+                           help="Poll interval in seconds while following (default: 0.5)")
+    p_monitor.add_argument("--flush-every", dest="flush_every", type=int, default=5,
+                           help="Refresh the status line every N transcript lines (default: 5)")
+    p_monitor.add_argument("--no-follow", dest="no_follow", action="store_true", default=False,
+                           help="Parse the existing transcript once and exit (no tailing)")
+    p_monitor.add_argument("--max-seconds", dest="max_seconds", type=float, default=None,
+                           help="Stop following after this many seconds")
+    p_monitor.set_defaults(func=_cmd_monitor)
+
+    # ------------------------------------------------------------------
     # show
     # ------------------------------------------------------------------
     p_show = subparsers.add_parser(
@@ -879,3 +1142,7 @@ def main() -> None:
     except (AetError, SuiteNotFoundError, RunAlreadyExistsError) as e:
         print(f"[aet] Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
