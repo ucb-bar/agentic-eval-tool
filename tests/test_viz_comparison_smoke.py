@@ -87,6 +87,20 @@ def test_tests_facets_saves_png(tmp_path, trajs):
     assert out.stat().st_size > 5000
 
 
+def test_rate_panels_short_run_scale_bar_does_not_explode(tmp_path):
+    # a minute-scale run mixed with a near-zero (crashed) run: the fixed ruler must clip to each
+    # panel so bbox_inches='tight' can't blow the canvas to millions of px (regression guard)
+    from aet.viz.comparison import plot_rate_panels
+    short = _arm("short", dur_s=8, final_cost=0.5, passes=(1, 1))     # 0.13 min
+    normal = _arm("normal", dur_s=300, final_cost=2, passes=(0, 1))   # 5 min
+    fig = plot_rate_panels([short, normal], ["short", "normal"])
+    w, h = fig.get_size_inches()
+    assert w < 60 and h < 80                         # bounded canvas, not runaway
+    out = tmp_path / "short.png"
+    fig.savefig(out, dpi=80, bbox_inches="tight")    # the mode that previously exploded
+    assert out.stat().st_size > 3000
+
+
 def test_tests_facets_degrades_without_milestones(tmp_path):
     # a run with no milestones and no round verdicts → flat lane, still renders
     from aet.viz.comparison import plot_tests_facets

@@ -813,6 +813,65 @@ def _cmd_plot(args) -> None:
 
 
 # ---------------------------------------------------------------------------
+# plot-sessions — point at raw Claude session transcripts → the comparison figures
+# ---------------------------------------------------------------------------
+
+_SESSION_KINDS = {
+    "rate-panels": "plot_rate_panels",
+    "cost-vs-time": "plot_cost_vs_time",
+    "tests-facets": "plot_tests_facets",
+}
+
+
+def _cmd_plot_sessions(args) -> None:
+    """Import one-or-many raw Claude Code sessions and render the comparison figures in one step.
+
+    Each ``session`` is a transcript ``*.jsonl`` file or a directory holding session logs; it becomes
+    one arm (labelled by its stem/dir name). No prior ``aet import`` needed — this is the
+    'just point it at your sessions' path."""
+    from aet.trajectory.importers.transcript import import_transcript
+    try:
+        from aet.viz import comparison as C
+    except ImportError as e:
+        print(f"[aet] {e}", file=sys.stderr)
+        sys.exit(1)
+
+    trajs, labels = [], []
+    for s in args.sessions:
+        p = Path(s)
+        # label by the file stem, but fall back to the parent dir when the file has a generic
+        # name (transcript.jsonl / session.jsonl) so per-run dirs stay distinguishable
+        if p.is_file():
+            label = p.parent.name if p.stem in ("transcript", "session", "stream") else p.stem
+        else:
+            label = p.name
+        traj = import_transcript(p, run_id=label,
+                                 pass_bool=(True if args.pass_all else None),
+                                 n_total=args.n_total)
+        if not traj.points:
+            print(f"[aet] plot-sessions: no agent turns parsed from {p}; skipping", file=sys.stderr)
+            continue
+        trajs.append(traj)
+        labels.append(label)
+        tok = traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens
+        cost = ("~$" if traj.provisional else "$") + f"{traj.final_cost_usd:.2f}"
+        print(f"[aet]   {label}: {tok / 1e6:.2f}M tok · {cost} · {traj.duration_s / 60.0:.1f} min")
+
+    if not trajs:
+        print("[aet] plot-sessions: no usable sessions found", file=sys.stderr)
+        sys.exit(1)
+
+    out_dir = Path(args.out) if args.out else Path.cwd()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    kinds = args.kinds or list(_SESSION_KINDS)
+    for kind in kinds:
+        fn = getattr(C, _SESSION_KINDS[kind])
+        fig = fn(trajs, labels)
+        for pth in _save_fig(fig, out_dir / f"{kind}.png", args.dpi):
+            print(f"[aet] wrote {pth}  ({len(trajs)} sessions)")
+
+
+# ---------------------------------------------------------------------------
 # run / resume — a sandboxed, recorded, rate-limit-resilient agent invocation
 # ---------------------------------------------------------------------------
 
@@ -1198,6 +1257,26 @@ def main() -> None:
                         help="Hide the cumulative-spend twin axis")
     p_plot.add_argument("--dpi", type=int, default=200, help="Output DPI (default: 200)")
     p_plot.set_defaults(func=_cmd_plot)
+
+    # ------------------------------------------------------------------
+    # plot-sessions — point at raw Claude sessions → comparison figures
+    # ------------------------------------------------------------------
+    p_ps = subparsers.add_parser(
+        "plot-sessions",
+        help="Point at raw Claude session transcripts and render the comparison figures in one step",
+    )
+    p_ps.add_argument("sessions", nargs="+", metavar="SESSION",
+                      help="Transcript *.jsonl files or dirs of session logs (one arm each)")
+    p_ps.add_argument("--out", metavar="DIR", default=None,
+                      help="Output directory for the figures (default: cwd)")
+    p_ps.add_argument("--kinds", nargs="+", choices=list(_SESSION_KINDS), default=None,
+                      help="Which figures to render (default: all three)")
+    p_ps.add_argument("--pass-all", dest="pass_all", action="store_true", default=False,
+                      help="Mark every session as a terminal PASS (for a tests-facets demo)")
+    p_ps.add_argument("--n-total", dest="n_total", type=int, default=1,
+                      help="Test-suite size for a terminal verdict (default: 1)")
+    p_ps.add_argument("--dpi", type=int, default=200, help="Output DPI (default: 200)")
+    p_ps.set_defaults(func=_cmd_plot_sessions)
 
     # ------------------------------------------------------------------
     # run — a sandboxed, recorded, rate-limit-resilient agent invocation

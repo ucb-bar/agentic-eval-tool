@@ -166,10 +166,16 @@ def _chip(ax, traj, *, y=1.045, fs=1.0):
 
 def _scale_bar(ax, traj, *, minutes=20, y=-0.185, fs=1.0, color=S.BLUE):
     """A fixed-``minutes`` ruler drawn just below the time axis; left-aligned at t=0. Because each
-    panel has its own time scale, the same duration renders at a different length per panel."""
+    panel has its own time scale, the same duration renders at a different length per panel.
+
+    The bar length is **clipped to the panel's own axis** so a ruler longer than a short run never
+    extends past the axes — otherwise ``bbox_inches='tight'`` would blow the canvas up (a 20-min bar
+    on a 0.01-min run is 2000× the axis width)."""
+    total = traj.duration_s / 60.0
+    if total <= 0 or minutes <= 0:
+        return
     tr = ax.get_xaxis_transform()
-    total = max(traj.duration_s / 60.0, 1.0)
-    x0, x1 = 0.0, float(minutes)
+    x0, x1 = 0.0, min(float(minutes), total)     # never draw past the panel's own time span
     ax.plot([x0, x1], [y, y], transform=tr, color=color, lw=4.2, zorder=27,
             solid_capstyle="butt", clip_on=False)
     for xx in (x0, x1):
@@ -207,14 +213,31 @@ def _labels_for(trajs, labels):
 
 
 # --------------------------------------------------------------------- public figures
-def plot_rate_panels(trajs, labels=None, *, independent_scales=True, scale_bar_minutes=20,
+def _nice_scale_bar(trajs) -> float:
+    """A 'nice' ruler length (min) that fits every panel: the largest of 1/2/5/10/15/30/60… that is
+    ≤ 90% of the shortest run, so the same absolute bar is drawable on every arm's own scale."""
+    durs = [t.duration_s / 60.0 for t in trajs if t.duration_s > 0]
+    if not durs:
+        return 0.0
+    shortest = min(durs)
+    nice = [1, 2, 5, 10, 15, 20, 30, 60, 120, 240]
+    fit = [b for b in nice if b <= shortest * 0.9]
+    return float(fit[-1]) if fit else round(shortest * 0.5, 1)
+
+
+def plot_rate_panels(trajs, labels=None, *, independent_scales=True, scale_bar_minutes=None,
                      show_spend=False, show_milestones=True):
-    """N per-arm token-rate panels, each on its own time scale with a fixed-duration ruler."""
+    """N per-arm token-rate panels, each on its own time scale with a fixed-duration ruler.
+
+    ``scale_bar_minutes`` defaults to an auto-picked 'nice' length that fits the shortest run (so it
+    works for minute-scale sweeps *and* hour-scale runs); pass a number to force it, or 0 to omit."""
     S.use_merlin_style()
     trajs = [t for t in trajs if t is not None]
     labs = _labels_for(trajs, labels)
     n = max(1, len(trajs))
     figh = 3.0 + 3.6 * n
+    if scale_bar_minutes is None:
+        scale_bar_minutes = _nice_scale_bar(trajs)
     bar_m = scale_bar_minutes if independent_scales else 0
     fig, axes = plt.subplots(n, 1, figsize=(19, figh), squeeze=False)
     axes = [a[0] for a in axes]
