@@ -28,6 +28,15 @@ from matplotlib.lines import Line2D
 RND_C = "#6f675c"   # round-divider colour
 
 
+def _fmt_cost(x: float, *, provisional: bool = False, ref: float | None = None) -> str:
+    """A $ label whose precision matches the magnitude — cents for sub-$10 sweeps (abc-testing-scale
+    per-session costs), whole dollars for large runs — so small-dollar arms don't all read as ``$2``.
+    ``ref`` (e.g. the max across arms) picks the precision for a whole figure so labels are uniform."""
+    scale = ref if ref is not None else x
+    digits = 2 if scale < 10 else (1 if scale < 100 else 0)
+    return ("~$" if provisional else "$") + f"{x:.{digits}f}"
+
+
 # --------------------------------------------------------------------- rate
 def rate_series(traj: RunTrajectory, series: str = "input", win: int | None = None):
     """(t_min, tok_per_min) — a Hanning-smoothed derivative of a cumulative token curve.
@@ -147,7 +156,7 @@ def _chip(ax, traj, *, y=1.045, fs=1.0):
     tok = (traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens) / 1e6
     fin = traj.final_tests()
     n_total = traj.tests_total()
-    cost = ("~$" if traj.provisional else "$") + f"{traj.final_cost_usd:.0f}"
+    cost = _fmt_cost(traj.final_cost_usd, provisional=traj.provisional)
     txt = (f"{traj.duration_s / 60.0:.0f} min active   ·   {cost}   ·   {tok:.0f}M tok   ·   "
            f"{traj.num_rounds} rounds   ·   final {fin}/{n_total}")
     ax.text(1.0, y, txt, transform=ax.transAxes, fontsize=11.5 * fs, color=S.INK,
@@ -243,8 +252,8 @@ def plot_cost_vs_time(trajs, labels=None):
         ye = s["spend"][-1] if s["spend"] else 0.0
         tok = (traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens) / 1e6
         ax.scatter([xe], [ye], s=230, color=col, ec=S.INK, lw=1.8, zorder=7, marker=mk)
-        prefix = "~$" if traj.provisional else "$"
-        ax.annotate(f"{prefix}{traj.final_cost_usd:.0f} · {tok:.0f}M", (xe, ye),
+        ax.annotate(f"{_fmt_cost(traj.final_cost_usd, provisional=traj.provisional, ref=ymax)}"
+                    f" · {tok:.0f}M", (xe, ye),
                     xytext=(0, 18), textcoords="offset points", color=col, fontsize=19,
                     fontweight="bold", va="bottom", ha="center", zorder=9,
                     path_effects=S._HALO_TXT(3.8))
