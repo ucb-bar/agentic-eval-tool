@@ -152,6 +152,16 @@ class ClaudeStreamResult:
         return seen
 
 
+def _content_blocks(msg: dict) -> list[dict]:
+    """The dict content-blocks of a message. Desktop/app session logs sometimes carry ``content``
+    as a plain string (or a list mixing strings and dicts); this keeps only the dict blocks so
+    callers can ``block.get(...)`` without a type check at every use site."""
+    content = msg.get("content", [])
+    if isinstance(content, str):
+        return []
+    return [b for b in content if isinstance(b, dict)]
+
+
 def parse_timestamped_stream(
     events: "list[tuple[float, str]]",
 ) -> "ClaudeStreamResult":
@@ -180,13 +190,13 @@ def parse_timestamped_stream(
         except Exception:
             continue
         if ev.get("type") == "assistant":
-            for block in ev.get("message", {}).get("content", []):
+            for block in _content_blocks(ev.get("message", {})):
                 if block.get("type") == "tool_use":
                     tid = block.get("id", "")
                     if tid and tid not in tool_use_ts:   # first (of any duplicate) emission wins
                         tool_use_ts[tid] = ts
         elif ev.get("type") == "user":
-            for block in ev.get("message", {}).get("content", []):
+            for block in _content_blocks(ev.get("message", {})):
                 if block.get("type") == "tool_result":
                     tid = block.get("tool_use_id", "")
                     if tid and tid not in tool_result_ts:
@@ -283,15 +293,16 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
             if mid:
                 seen_msg_ids.add(mid)
             usage = msg.get("usage", {})
+            blocks = _content_blocks(msg)
             # Collect text blocks first — used for both TurnUsage and ToolCall
             turn_text_blocks: list[str] = []
-            for block in msg.get("content", []):
+            for block in blocks:
                 if block.get("type") == "text":
                     t = (block.get("text") or "").strip()
                     if t:
                         turn_text_blocks.append(t)
             reasoning = " | ".join(turn_text_blocks)[:600]
-            has_thinking = any(b.get("type") == "thinking" for b in msg.get("content", []))
+            has_thinking = any(b.get("type") == "thinking" for b in blocks)
             if not is_dup:
                 turn_num += 1
                 turn_usage.append(TurnUsage(
@@ -307,7 +318,7 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
                     has_thinking=has_thinking,
                 ))
             # tool_use blocks dedup by tool_use_id, so duplicate emissions collapse harmlessly
-            for block in msg.get("content", []):
+            for block in blocks:
                 if block.get("type") == "tool_use":
                     tc = ToolCall(
                         tool_use_id=block.get("id", ""),
@@ -320,7 +331,7 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
 
         elif etype == "user":
             msg = event.get("message", {})
-            for block in msg.get("content", []):
+            for block in _content_blocks(msg):
                 if block.get("type") == "tool_result":
                     tid = block.get("tool_use_id", "")
                     if tid in tool_calls_by_id:

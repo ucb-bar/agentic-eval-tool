@@ -5,6 +5,38 @@ All notable changes to `aet` are recorded here.
 ## [Unreleased]
 
 ### Added
+- **Sandboxed agent runner (`aet run` / `aet.runner`)** — a single Claude Code invocation launched
+  inside a deny-by-default `aet.isolation` bwrap sandbox, streamed to a transcript, recorded as a
+  `RunTrajectory`, and materialized into a canonical aet run (manifest + `logs/` +
+  `metrics/trajectory.json`) that `aet runs`/`aet show`/`aet plot` read directly. Closes
+  *sandbox-run → record → plot* for any project. `--sandbox none` needs `--allow-unsandboxed`;
+  `--agent-cmd` overrides the `claude` command for custom launchers / dummy runs.
+- **Rate-limit watchdog + auto-resume (`aet.ratelimit`, `aet run --resume`)** — unattended runs
+  survive the Claude five-hour usage limit: on a rejected-with-no-work invocation the runner
+  checkpoints, waits to the exact `resetsAt` (or polls every ~20 min up to a 5h20m cap when the
+  epoch is missing) and resumes the same session — never burning the attempt. On the *weekly* limit
+  (or an exhausted wait budget) it stops honestly: writes `UNFINISHED.md` + sets manifest
+  `status: rate_limited_unfinished` with a `resume_cmd`, surfaced by `aet runs`, so a person or
+  another session picks it up with `aet run --resume <run>`. Daemon-free (checkpoint + relaunch),
+  and fully testable (injectable spawn/`sleep`/`now`) with no real `claude`, `bwrap`, or 5-hour wait.
+- **Generic transcript importer (`aet import --source transcript`)** — the repo-agnostic default:
+  ingests one *or many* Claude Code `*.jsonl` files into one trajectory with zero project-specific
+  code. Handles both on-disk shapes — CLI `stream-json` (billed cost, exact) and desktop/app session
+  logs (no `result` event → provisional list-price cost) — orders multiple session files by first
+  timestamp, and records an optional terminal `--pass/--fail` verdict + milestone (e.g. abc-testing's
+  `functional_pass`). Verified on the recovered abc9/abc11 desktop sessions and the abc4 CLI arms.
+- **Presentation comparison figures (`aet plot --kind`, `aet.viz.comparison`)** — the polished N-arm
+  views, consuming only the data-model: `rate-panels` (per-arm token-rate panels, each on its own
+  time scale with a below-axis fixed-duration ruler, activity bands, gold milestones, corner chip),
+  `cost-vs-time` (one labeled cumulative-spend line per arm), and `tests-facets` (small-multiple
+  tests-passing step-lanes; degrades gracefully to the final verdict when there's no over-time
+  signal). `series_styles(n)` gives repo-agnostic per-arm colour/marker/dash identity. `--out` writes
+  a `.png` and its sibling `.svg`; `compare --plots` renders the full set.
+- **`claude_stream` robustness** — the parser now tolerates string content-blocks (desktop/app
+  session logs carry a `user` message's `content` as a plain string), so real session logs import
+  without crashing.
+
+### Added
 - **Agentic trajectory recording (`aet.trajectory`)** — canonical, repo-agnostic record of what an
   agent did over time: cumulative tokens (input/output/cache), cumulative cost, an activity timeline
   (thinking / reading / writing / bash / long tool-waits), and external-oracle test-pass milestones.
@@ -34,6 +66,13 @@ All notable changes to `aet` are recorded here.
   usage) so tokens are counted once, and consumers can split a transcript at each `result` event
   (a file may concatenate several invocations). Together these make imported token/cost totals
   match the authoritative per-model billing exactly. `TurnUsage.has_thinking` added.
+- **Isolation & integrity (`aet.isolation`)** — reusable, project-agnostic filesystem isolation for
+  agentic runs. `SandboxSpec`/`bwrap_argv`/`wrap_command` build a deny-by-default bubblewrap allow-list
+  (agent sees only granted files + tools; answers, sibling runs, and other projects masked; per-file
+  `/dev/null` masking; DNS + nested-session-env handling; permission-safe on locked dirs).
+  `AuditPolicy`/`audit_run` is a post-run allow-list transcript check (hard cheats vs soft out-of-scope vs
+  review-warnings). `file_access_ledger` enumerates every file the agent touched and what it did. See
+  `docs/isolation.md`. Extracted from the gemmini agentic A/B harness.
 - **Multi-run statistics** — `compare()` now writes `statistical_comparison.md` with Welch's
   t-test, 95% confidence intervals, and Cohen's d effect size for every key metric across
   methods. Significance markers (`***` / `**` / `*` / `ns`) included.

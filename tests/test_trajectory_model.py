@@ -74,3 +74,31 @@ def test_token_series_in_minutes_and_monotonic():
 def test_milestone_series_sorted_pairs():
     t = _sample()
     assert t.milestone_series() == [(2.0, 13), (400.0 / 60.0, 17)]
+
+
+def test_tests_steps_from_milestones_monotonic():
+    t = _sample()   # milestones 13@120s, 17@400s; duration 600s
+    xs, ys = t.tests_steps()
+    assert xs[0] == 0.0 and ys[0] == 0
+    assert ys == sorted(ys)                       # non-decreasing
+    assert ys[-1] == t.final_tests() == 17        # ends at the best reached
+    assert xs[-1] == t.duration_s / 60.0          # padded to run end
+    assert t.tests_total() == 20
+
+
+def test_tests_steps_falls_back_to_round_verdicts():
+    t = RunTrajectory(
+        run_id="x", duration_s=600.0, num_rounds=2,
+        rounds=[RoundBoundary(0, 0.0, 300.0, n_passed=5, n_total=20),
+                RoundBoundary(1, 300.0, 600.0, n_passed=9, n_total=20)],
+    )
+    xs, ys = t.tests_steps()
+    assert ys[-1] == 9 and t.final_tests() == 9
+    assert t.tests_total() == 20
+
+
+def test_tests_steps_empty_progression_degrades():
+    t = RunTrajectory(run_id="x", duration_s=120.0)   # no milestones, no round verdicts
+    xs, ys = t.tests_steps()
+    assert ys == [0, 0] and xs == [0.0, 2.0]
+    assert t.final_tests() == 0 and t.tests_total() == 20

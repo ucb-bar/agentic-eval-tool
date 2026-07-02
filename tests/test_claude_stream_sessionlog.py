@@ -31,3 +31,16 @@ def test_unique_ids_unaffected():
     r = parse_stream("\n".join(json.dumps(e) for e in events))
     assert len(r.turn_usage) == 2
     assert r.total_cache_read_tokens == 300
+
+
+def test_string_content_blocks_do_not_crash():
+    # desktop/app session logs carry user content as a plain string (not a list of blocks);
+    # the parser must skip it, not iterate its characters and call .get() on each.
+    events = [{"type": "user", "message": {"role": "user", "content": "just some text"}},
+              _asst("m1", 100),
+              {"type": "user", "message": {"role": "user",
+                                           "content": ["a bare string", {"type": "tool_result",
+                                                                         "tool_use_id": "x"}]}},
+              {"type": "result", "subtype": "success", "cost_usd": 0.1, "num_turns": 1}]
+    r = parse_stream("\n".join(json.dumps(e) for e in events))
+    assert len(r.turn_usage) == 1                 # the one real assistant turn

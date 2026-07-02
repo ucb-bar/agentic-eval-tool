@@ -97,7 +97,7 @@ def _cmd_init_project(args) -> None:
             print(f"  created: {path.relative_to(project_root)}")
     else:
         print(
-            f"[aet] No files written (all already exist; use --force to overwrite)"
+            "[aet] No files written (all already exist; use --force to overwrite)"
         )
 
 
@@ -318,12 +318,23 @@ def _write_comparison_plot(run_paths, report_dir: Path) -> None:
         return
     try:
         from aet.viz.trajectory_plot import plot_comparison
+        from aet.viz.comparison import plot_rate_panels, plot_cost_vs_time, plot_tests_facets
     except ImportError as e:
         print(f"[aet] --plots: {e}", file=sys.stderr)
         return
-    out = report_dir / "trajectory_comparison.png"
-    plot_comparison(trajs).savefig(out, dpi=200, bbox_inches="tight")
-    print(f"[aet] wrote {out}  ({len(trajs)} runs)")
+    labels = [t.run_id for t in trajs]
+    # the full presentation set: stacked cumulative + rate panels + cost-vs-time + tests facets.
+    # tests-facets degrades gracefully when a run has no over-time test signal (flat lane).
+    figures = {
+        "trajectory_comparison": plot_comparison(trajs),
+        "rate_panels": plot_rate_panels(trajs, labels),
+        "cost_vs_time": plot_cost_vs_time(trajs, labels),
+        "tests_facets": plot_tests_facets(trajs, labels),
+    }
+    for name, fig in figures.items():
+        out = report_dir / f"{name}.png"
+        for p in _save_fig(fig, out, 200):
+            print(f"[aet] wrote {p}  ({len(trajs)} runs)")
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +445,6 @@ def _cmd_baseline_set(args) -> None:
 
 
 def _cmd_baseline_show(args) -> None:
-    import json as _json
     project_root = _resolve_project_root(args)
     suite = args.suite
     baseline_path = _baseline_dir(project_root, suite) / "baseline.json"
@@ -498,6 +508,16 @@ def _cmd_runs(args) -> None:
                 status = r.get("status", "?")
             except Exception:
                 pass
+        else:
+            # no validation report → fall back to the manifest status (surfaces rate_limited_unfinished
+            # / completed for `aet run` runs, so unfinished experiments are discoverable here)
+            manifest_path = run_dir / "run_manifest.yaml"
+            if manifest_path.exists():
+                try:
+                    from aet.core.run_manifest import RunManifest
+                    status = RunManifest.load(manifest_path).status or status
+                except Exception:
+                    pass
 
         params_path = run_dir / "logs" / "params.json"
         if params_path.exists():
@@ -533,7 +553,9 @@ def _cmd_runs(args) -> None:
         print(json.dumps(rows, indent=2))
         return
 
-    STATUS_SYM = {"pass": "✓", "partial": "~", "error": "✗", "unknown": "?", "?": "?"}
+    STATUS_SYM = {"pass": "✓", "partial": "~", "error": "✗", "unknown": "?", "?": "?",
+                  "completed": "✓", "rate_limited_unfinished": "⏸", "rate_limited_waiting": "⏳",
+                  "initialized": "·"}
     col_w = max(len(r["run_id"]) for r in rows)
     print(f"\n  {'':2}  {'suite':<14}  {'run_id':<{col_w}}  {'model':<24}  {'turns':>5}  {'tokens_in':>10}  {'cost':>10}")
     print(f"  {'':2}  {'-'*14}  {'-'*col_w}  {'-'*24}  {'-'*5}  {'-'*10}  {'-'*10}")
@@ -695,13 +717,21 @@ def _cmd_import(args) -> None:
     elif getattr(args, "no_circt", False):
         circt = False
 
-    traj = importer(
-        args.raw,
+    kwargs = dict(
         classifier_config=cfg,
         circt=circt,
         milestone_time=args.milestone_time,
         run_id=args.run_id or "",
     )
+    # the generic transcript importer accepts an optional terminal pass/fail + label
+    if args.source == "transcript":
+        kwargs["label"] = getattr(args, "label", None)
+        kwargs["n_total"] = getattr(args, "n_total", 1)
+        pb = getattr(args, "pass_bool", None)
+        if pb is not None:
+            kwargs["pass_bool"] = pb
+
+    traj = importer(args.raw, **kwargs)
 
     out = Path(args.out) if args.out else Path(args.raw) / "trajectory.json"
     traj.to_json(out)
@@ -734,23 +764,92 @@ def _load_trajectory(path: Path):
     return RunTrajectory.from_run_dir(path)
 
 
+def _save_fig(fig, out: Path, dpi: int) -> list[Path]:
+    """Save a figure to ``out``; if the extension is .png/.svg, ALSO write the sibling format
+    (dual output, matching the reference figure pipeline). Returns the paths written."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    written = [out]
+    fig.savefig(out, dpi=dpi, bbox_inches="tight")
+    if out.suffix.lower() == ".png":
+        svg = out.with_suffix(".svg")
+        fig.savefig(svg, bbox_inches="tight")
+        written.append(svg)
+    return written
+
+
 def _cmd_plot(args) -> None:
+    kind = getattr(args, "kind", "trajectory")
     try:
-        from aet.viz.trajectory_plot import plot_trajectory, plot_comparison
+        if kind in ("trajectory", "comparison"):
+            from aet.viz.trajectory_plot import plot_trajectory, plot_comparison
+        else:
+            from aet.viz.comparison import (
+                plot_rate_panels, plot_cost_vs_time, plot_tests_facets,
+            )
     except ImportError as e:
         print(f"[aet] {e}", file=sys.stderr)
         sys.exit(1)
 
     main_traj = _load_trajectory(Path(args.run))
-    if args.comparison:
-        trajs = [main_traj] + [_load_trajectory(Path(p)) for p in args.comparison]
+    trajs = [main_traj] + [_load_trajectory(Path(p)) for p in (args.comparison or [])]
+    labels = [t.run_id for t in trajs]
+
+    if kind == "rate-panels":
+        fig = plot_rate_panels(trajs, labels)
+    elif kind == "cost-vs-time":
+        fig = plot_cost_vs_time(trajs, labels)
+    elif kind == "tests-facets":
+        fig = plot_tests_facets(trajs, labels)
+    elif kind == "comparison" or (kind == "trajectory" and args.comparison):
+        from aet.viz.trajectory_plot import plot_comparison
         fig = plot_comparison(trajs, log_tokens=not args.linear_tokens)
     else:
         fig = plot_trajectory(main_traj, log_tokens=not args.linear_tokens,
                               show_spend=not args.no_spend)
-    out = Path(args.out) if args.out else Path(args.run).with_suffix(".png")
-    fig.savefig(out, dpi=args.dpi, bbox_inches="tight")
-    print(f"[aet] wrote {out}")
+
+    out = Path(args.out) if args.out else Path(args.run).with_suffix(f".{kind}.png")
+    for p in _save_fig(fig, out, args.dpi):
+        print(f"[aet] wrote {p}")
+
+
+# ---------------------------------------------------------------------------
+# run / resume — a sandboxed, recorded, rate-limit-resilient agent invocation
+# ---------------------------------------------------------------------------
+
+def _cmd_run(args) -> None:
+    from aet.runner import run_agent, resume_run, STATUS_UNFINISHED
+
+    common = dict(
+        model=args.model,
+        sandbox=args.sandbox,
+        allow=args.allow or [],
+        deny=args.deny or [],
+        extra_binds=args.extra_binds or [],
+        env_prefix=args.env_prefix or "",
+        allow_unsandboxed=args.allow_unsandboxed,
+        agent_cmd=args.agent_cmd,
+        poll_seconds=args.poll_seconds,
+        max_rate_limit_waits=args.max_rate_limit_waits,
+    )
+    if getattr(args, "resume", None):
+        res = resume_run(args.resume, **common)
+    else:
+        if not args.task or not args.workspace:
+            print("[aet] Error: --task and --workspace are required (or use --resume <run>)",
+                  file=sys.stderr)
+            sys.exit(2)
+        res = run_agent(args.task, args.workspace, into=args.into, label=args.label or "",
+                        **common)
+
+    print(f"[aet] run {res.status}: {res.run_dir}")
+    print(f"[aet]   {res.attempts} attempt(s), {res.rate_limit_waits} rate-limit wait(s), "
+          f"session={res.session_id or '—'}")
+    if res.status == STATUS_UNFINISHED:
+        print(f"[aet]   ⚠ rate-limited ({res.limit_type or 'usage'}); left UNFINISHED.md. "
+              f"Resume with:  aet run --resume {res.run_dir}", file=sys.stderr)
+        sys.exit(3)
+    if res.trajectory_path:
+        print(f"[aet]   plot it:  aet plot {res.run_dir} --kind trajectory")
 
 
 # ---------------------------------------------------------------------------
@@ -1044,10 +1143,20 @@ def main() -> None:
         "import",
         help="Import an existing agentic run into a canonical trajectory",
     )
-    p_import.add_argument("--source", default="capsule-bench",
-                          help="Run layout to import (default: capsule-bench)")
-    p_import.add_argument("--raw", required=True, metavar="DIR",
-                          help="Path to the existing run directory")
+    p_import.add_argument("--source", default="capsule-bench", metavar="SOURCE",
+                          help="Run layout to import (default: capsule-bench; also 'transcript', the "
+                               "generic one-or-many Claude Code *.jsonl importer for any project).")
+    p_import.add_argument("--raw", required=True, metavar="DIR_OR_FILE",
+                          help="Path to the existing run directory (or a single transcript file "
+                               "for --source transcript)")
+    p_import.add_argument("--label", default=None,
+                          help="[transcript] Human label for the arm (defaults to the file/dir name)")
+    p_import.add_argument("--n-total", dest="n_total", type=int, default=1,
+                          help="[transcript] Test-suite size for a terminal --pass/--fail verdict")
+    p_import.add_argument("--pass", dest="pass_bool", action="store_true", default=None,
+                          help="[transcript] Record a terminal PASS verdict (e.g. functional_pass)")
+    p_import.add_argument("--fail", dest="pass_bool", action="store_false",
+                          help="[transcript] Record a terminal FAIL verdict")
     p_import.add_argument("--circt", dest="circt", action="store_true", default=None,
                           help="Treat as a CIRCT run (adds RTL-facts long-wait rules)")
     p_import.add_argument("--no-circt", dest="no_circt", action="store_true", default=False,
@@ -1074,16 +1183,59 @@ def main() -> None:
     )
     p_plot.add_argument("run", metavar="RUN_OR_JSON",
                         help="A run directory or a trajectory.json file")
+    p_plot.add_argument("--kind", default="trajectory",
+                        choices=["trajectory", "comparison", "rate-panels",
+                                 "cost-vs-time", "tests-facets"],
+                        help="Figure kind (default: trajectory). The comparison kinds use "
+                             "run + --comparison as the arm list.")
     p_plot.add_argument("--out", metavar="PNG", default=None,
-                        help="Output image path (default: <run>.png)")
+                        help="Output image path (default: <run>.<kind>.png). A .png also writes .svg")
     p_plot.add_argument("--comparison", nargs="+", metavar="RUN", default=None,
-                        help="Additional runs/trajectories to stack for comparison")
+                        help="Additional runs/trajectories to stack/compare (the other arms)")
     p_plot.add_argument("--linear-tokens", dest="linear_tokens", action="store_true",
                         default=False, help="Use a linear token axis (default: log)")
     p_plot.add_argument("--no-spend", dest="no_spend", action="store_true", default=False,
                         help="Hide the cumulative-spend twin axis")
     p_plot.add_argument("--dpi", type=int, default=200, help="Output DPI (default: 200)")
     p_plot.set_defaults(func=_cmd_plot)
+
+    # ------------------------------------------------------------------
+    # run — a sandboxed, recorded, rate-limit-resilient agent invocation
+    # ------------------------------------------------------------------
+    p_run = subparsers.add_parser(
+        "run",
+        help="Launch a sandboxed, recorded agent run (survives the 5-hour limit; --resume to continue)",
+    )
+    p_run.add_argument("--task", metavar="FILE_OR_TEXT", default=None,
+                       help="Task prompt file (or inline text) fed to the agent on stdin")
+    p_run.add_argument("--workspace", metavar="DIR", default=None,
+                       help="The agent's writable working dir (the only writable path in the sandbox)")
+    p_run.add_argument("--into", metavar="AET_RUN_DIR", default=None,
+                       help="Where to materialize the aet run (default: <workspace>_aetrun)")
+    p_run.add_argument("--resume", metavar="RUN_DIR", default=None,
+                       help="Resume a previously rate-limited run from its recorded session")
+    p_run.add_argument("--label", default=None, help="Run label (default: run dir name)")
+    p_run.add_argument("--model", default="claude-opus-4-8", help="Model id (default: claude-opus-4-8)")
+    p_run.add_argument("--sandbox", choices=["bwrap", "none"], default="bwrap",
+                       help="Isolation backend (default: bwrap deny-by-default)")
+    p_run.add_argument("--allow", nargs="+", metavar="PATH", default=None,
+                       help="Read-only paths granted into the sandbox (inputs + in-repo tools)")
+    p_run.add_argument("--deny", nargs="+", metavar="PATH", default=None,
+                       help="Paths masked even if under an --allow (answers / sibling runs)")
+    p_run.add_argument("--extra-binds", dest="extra_binds", nargs="+", metavar="PATH", default=None,
+                       help="Toolchain dirs outside the repo to bind read-only")
+    p_run.add_argument("--env-prefix", dest="env_prefix", default="",
+                       help="Shell export prefix for the toolchain (PATH/LD_LIBRARY_PATH/...)")
+    p_run.add_argument("--allow-unsandboxed", dest="allow_unsandboxed", action="store_true",
+                       default=False, help="Permit a real run with --sandbox none (guard override)")
+    p_run.add_argument("--agent-cmd", dest="agent_cmd", default=None,
+                       help="Override the claude command (a shell cmd emitting stream-json; for "
+                            "custom launchers / dummy runs)")
+    p_run.add_argument("--poll-seconds", dest="poll_seconds", type=float, default=1200.0,
+                       help="Rate-limit poll interval when the reset epoch is unknown (default: 1200)")
+    p_run.add_argument("--max-rate-limit-waits", dest="max_rate_limit_waits", type=int, default=3,
+                       help="Max five-hour waits before leaving the run unfinished (default: 3)")
+    p_run.set_defaults(func=_cmd_run)
 
     # ------------------------------------------------------------------
     # monitor — live activity view of an in-flight agent session

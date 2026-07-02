@@ -194,3 +194,43 @@ class RunTrajectory:
     def milestone_series(self) -> list[tuple[float, int]]:
         """(minute, n_passed) pairs, sorted by time — the gold test-pass steps."""
         return sorted(((m.t_s / 60.0, m.n_passed) for m in self.milestones), key=lambda x: x[0])
+
+    # ------------------------------------------------------------------ tests-over-time
+    def tests_total(self) -> int:
+        """The '/N' denominator for tests-passing (e.g. 20). Milestones win, else round verdicts."""
+        for m in self.milestones:
+            if m.n_total:
+                return int(m.n_total)
+        for r in reversed(self.rounds):
+            if r.n_total:
+                return int(r.n_total)
+        return 20
+
+    def tests_steps(self) -> tuple[list[float], list[int]]:
+        """(minutes, n_passing) non-decreasing step series over the run.
+
+        Uses the self-check milestones when present (the intermediate 13→17→20 rises); falls back to
+        per-round QA verdicts at round-end times. Returns an empty-progression ([0], [0] → duration)
+        when neither exists — so tests-over-time views degrade gracefully to 'no progression'."""
+        pts = self.milestone_series()   # (minute, count), sorted
+        if not pts:
+            pts = [(r.t_end_s / 60.0, int(r.n_passed))
+                   for r in self.rounds if r.n_passed is not None]
+        xs: list[float] = [0.0]
+        ys: list[int] = [0]
+        last = 0
+        for x, c in pts:
+            c = max(int(c), last)       # enforce non-decreasing
+            xs.append(float(x))
+            ys.append(c)
+            last = c
+        xs.append(self.duration_s / 60.0)
+        ys.append(ys[-1])
+        return xs, ys
+
+    def final_tests(self) -> int:
+        """Best tests-passing the run reached (max milestone, else last round verdict, else 0)."""
+        if self.milestones:
+            return int(max(m.n_passed for m in self.milestones))
+        passed = [r.n_passed for r in self.rounds if r.n_passed is not None]
+        return int(max(passed)) if passed else 0

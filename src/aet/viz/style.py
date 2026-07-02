@@ -120,3 +120,25 @@ ACT_LAB = {"think": "thinking", "read": "reading", "write": "writing code",
 # token-line tones
 L_INPUT, L_OUTPUT, L_CACHE, L_TOTAL, L_SPEND = SAGE, NAVY, SLATE, INK, "#4B3F6E"
 GOLDLAB = "#7a6a40"
+
+# cream text-halo so labels read over lines (port of the reference _HALO_TXT / LHALO)
+def _HALO_TXT(lw: float = 3.4):
+    return [pe.withStroke(linewidth=lw, foreground=BG)]
+
+
+LHALO = [pe.withStroke(linewidth=5.2, foreground=BG)]
+
+
+# ---- per-series identity for N-arm comparisons (repo-agnostic generalization of RUN_STYLE) ----
+_SERIES_COLORS = [MAUVE, NAVY, SLATE, GOLD, SAGE, BLUE]
+_SERIES_MARKERS = ["o", "s", "D", "^", "v", "P"]
+_SERIES_DASHES = ["-", (0, (7, 2.5)), (0, (1.5, 2.0)), (0, (8, 2.5, 1.5, 2.5)),
+                  (0, (4, 2)), (0, (2, 1.5))]
+
+
+def series_styles(n: int) -> list[tuple]:
+    """`n` distinct (color, marker, linestyle) triples cycling the house palette — one per arm.
+    Colors assign by order, so a caller keeps identity stable by passing arms in a fixed order."""
+    return [(_SERIES_COLORS[i % len(_SERIES_COLORS)],
+             _SERIES_MARKERS[i % len(_SERIES_MARKERS)],
+             _SERIES_DASHES[i % len(_SERIES_DASHES)]) for i in range(n)]
