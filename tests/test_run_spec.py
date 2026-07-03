@@ -1,5 +1,4 @@
 """Tests for aet.core.run_spec.RunSpec."""
-import pytest
 from pathlib import Path
 
 from aet.core.run_spec import RunSpec

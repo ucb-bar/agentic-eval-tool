@@ -2,7 +2,6 @@
 import json
 import logging
 import pytest
-from pathlib import Path
 
 from aet.core.rubric import RubricCriterion, compute_weighted_score, validate_rubric
 from aet.tracking.run_logger import EvalRunLogger

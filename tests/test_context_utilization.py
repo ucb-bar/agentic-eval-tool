@@ -1,7 +1,6 @@
 """Tests for context window utilization tracking."""
 import json
 import logging
-import pytest
 from dataclasses import dataclass, field
 
 from aet.tracking.run_logger import EvalRunLogger

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any
 
 
 def _rule(rule_id: str, name: str, passed: bool, severity: str, message: str) -> dict:
@@ -32,7 +31,7 @@ def check_r2(run_dir: Path, manifest: dict) -> dict:
     xdsl_dir = run_dir / "generated" / f"{target}-mlir" / "xdsl"
     if xdsl_dir.exists() and any(xdsl_dir.iterdir()):
         return _rule("R2", "xdsl-before-tablegen", True, "info",
-                     f"xdsl/ directory exists and is non-empty")
+                     "xdsl/ directory exists and is non-empty")
     return _rule("R2", "xdsl-before-tablegen", False, "warning",
                  "xdsl/ directory is absent or empty; "
                  "xDSL artifacts must exist before TableGen/C++ promotion")
@@ -69,7 +68,7 @@ def check_r4(run_dir: Path, manifest: dict, repo_root: Path) -> dict:
             text=True,
             check=True,
         )
-        changed = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+        changed = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
         if changed:
             return _rule("R4", "merlin-core-immutable", False, "error",
                          f"Merlin core files modified since init: {', '.join(changed[:5])}")

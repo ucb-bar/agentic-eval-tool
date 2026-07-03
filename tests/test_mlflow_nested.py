@@ -1,8 +1,6 @@
 """Tests for MLflow nested runs and log_metric_step."""
 import json
-from pathlib import Path
 
-import pytest
 
 from aet.tracking.types import TrackingConfig
 from aet.tracking.run_logger import EvalRunLogger

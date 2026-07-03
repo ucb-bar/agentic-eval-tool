@@ -5,7 +5,6 @@ from __future__ import annotations
 import concurrent.futures
 from pathlib import Path
 
-import pytest
 
 from aet.core.run_spec import RunSpec
 from aet.core.run_paths import RunPaths

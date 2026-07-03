@@ -1,7 +1,5 @@
 import csv
-import json
 from pathlib import Path
-from typing import Any
 
 from aet.core.metrics import mean_std, fmt, coerce_na
 

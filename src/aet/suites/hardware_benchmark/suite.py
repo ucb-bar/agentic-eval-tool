@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aet.suites.base import EvalSuite
-from aet.core.metrics import welch_ttest, confidence_interval, effect_size, coerce_na, mean_std
+from aet.core.metrics import welch_ttest, confidence_interval, effect_size, coerce_na
 
 
 _KEY_METRICS = [
@@ -217,7 +217,8 @@ class HardwareBenchmarkSuite(EvalSuite):
                 ratios = _nums(mrows, "hw.perf_ratio")
                 walls = _nums(mrows, "run.wall_time_s")
                 cheats = _nums(mrows, "hw.cheat_suspected")
-                pr = _mean(passes); pr_sd = _stddev(passes)
+                pr = _mean(passes)
+                pr_sd = _stddev(passes)
                 lines.append(
                     f"| {method} | {len(mrows)} | {_fmt(pr)} | {_fmt(pr_sd)} | "
                     f"{_fmt(_mean(ratios), 3)} | {_fmt(_mean(walls), 1)} | "
@@ -233,7 +234,8 @@ class HardwareBenchmarkSuite(EvalSuite):
                 recalls = _nums(mrows, "hw.localization_recall")
                 precs = _nums(mrows, "hw.localization_precision")
                 walls = _nums(mrows, "run.wall_time_s")
-                pr = _mean(passes); pr_sd = _stddev(passes)
+                pr = _mean(passes)
+                pr_sd = _stddev(passes)
                 lines.append(
                     f"| {method} | {len(mrows)} | {_fmt(pr)} | {_fmt(pr_sd)} | "
                     f"{_fmt(_mean(recalls), 3)} | {_fmt(_mean(precs), 3)} | "

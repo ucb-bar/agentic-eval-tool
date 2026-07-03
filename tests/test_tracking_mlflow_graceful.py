@@ -1,6 +1,4 @@
 """Test that mlflow mode degrades gracefully when mlflow is unreachable."""
-import pytest
-from pathlib import Path
 
 from aet.tracking import EvalRunLogger
 

@@ -1,8 +1,6 @@
 from contextlib import nullcontext
 from pathlib import Path
 from aet.suites.base import EvalSuite
-from aet.core.run_spec import RunSpec
-from aet.core.run_paths import RunPaths
 
 
 class TargetGenSuite(EvalSuite):
@@ -156,7 +154,6 @@ class TargetGenSuite(EvalSuite):
 
     def compare(self, run_paths, report_dir, logger):
         from aet.suites.targetgen.compare import run as compare_run
-        import os
         # run_paths is list of run dirs; find project root and suite
         if run_paths:
             # Navigate up: run_path = project_root/runs/suite/run_id

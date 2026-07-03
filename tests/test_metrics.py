@@ -1,5 +1,4 @@
 """Tests for aet.core.metrics."""
-import pytest
 from aet.core.metrics import (
     mean_std, fmt, coerce_na,
     welch_ttest, confidence_interval, effect_size,

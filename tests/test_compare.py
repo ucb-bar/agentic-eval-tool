@@ -2,8 +2,6 @@
 import csv
 import json
 import logging
-import pytest
-from pathlib import Path
 
 from aet.suites import get_suite
 from aet.core.run_spec import RunSpec

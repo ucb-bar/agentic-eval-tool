@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any, Callable
-from aet.core.errors import AetError, ExecutionError
+from aet.core.errors import AetError
 from aet.core.run_spec import RunSpec
 from aet.execution.base import ExecutionBackend
 

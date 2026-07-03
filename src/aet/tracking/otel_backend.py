@@ -26,10 +26,12 @@ class OtelBackend:
         self._openllmetry_instrumentors: list = []
 
         try:
+            # availability probe: import the SDK pieces just to fail fast with a friendly hint
+            # if opentelemetry-sdk is absent (only `trace` is used here; _setup re-imports the rest)
             from opentelemetry import trace
-            from opentelemetry.sdk.resources import Resource
-            from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+            from opentelemetry.sdk.resources import Resource  # noqa: F401
+            from opentelemetry.sdk.trace import TracerProvider  # noqa: F401
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter  # noqa: F401,E501
         except ImportError:
             local.warn(
                 "opentelemetry-sdk not installed; OTel tracing disabled. "

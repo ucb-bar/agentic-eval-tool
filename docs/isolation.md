@@ -17,8 +17,9 @@ from pathlib import Path
 from aet.isolation import SandboxSpec, wrap_command
 
 spec = SandboxSpec(
-    workspace=Path("/run/ws"),                 # the ONLY writable dir (the agent's cwd)
+    workspace=Path("/run/ws"),                 # the ONLY unconditionally-writable dir (the agent's cwd)
     allow=[Path("/repo/inputs"), Path("/repo/tools")],   # ro-bind: granted inputs + in-repo tools
+    rw_binds=[Path.home() / ".claude"],        # extra WRITABLE bind (agent CLI state under an ro home)
     deny=[Path("/repo/inputs/answers")],       # tmpfs-mask AFTER allow (deny wins over a broad allow)
     mask_files=[Path("/repo/inputs/golden.yaml")],       # /dev/null overlay (per-FILE answer)
     extra_binds=[Path("/opt/toolchain")],      # ro-bind tools that live OUTSIDE the repo
@@ -31,8 +32,10 @@ subprocess.run(["bash", "-c", cmd])
 ```
 
 Notes learned in production:
-- **Order matters** — `deny`/`mask_files` are applied *after* `allow`/`extra_binds`, so a broad allow can't
-  re-expose a denied sub-path.
+- **Order matters** — `rw_binds` are applied *after* the read-only `allow`/`extra_binds` (so a writable
+  state dir overrides a broad ro allow — e.g. `~/.claude` writable under an otherwise read-only `$HOME`),
+  and `deny`/`mask_files` are applied *after* `rw_binds`, so a broad allow (or a rw bind) can't re-expose a
+  denied sub-path. Only `workspace` and `rw_binds` are writable; everything else granted is read-only.
 - **DNS** — `/etc/resolv.conf` usually symlinks into `/run`, which bwrap doesn't bind; `dns=True` binds the
   resolver stub so an in-sandbox process can reach the network.
 - **Nested sessions** — when launching a child agent from inside another agent session, clear the parent's

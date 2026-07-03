@@ -1,6 +1,5 @@
 """Tests for aet.core.failures."""
 import json
-import pytest
 from aet.core.failures import FailureCategory, FailureRecord
 
 

@@ -7,7 +7,6 @@ and attributes without requiring a running collector.
 from __future__ import annotations
 
 import pytest
-from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +28,6 @@ def _make_otel_backend_with_exporter(tmp_path, suite="default", method="test", s
 
     from aet.tracking.types import TrackingConfig
     from aet.tracking.otel_backend import OtelBackend
-    import logging
 
     config = TrackingConfig(
         mode="full",

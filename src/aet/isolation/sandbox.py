@@ -33,6 +33,9 @@ DNS_DIR = "/run/systemd/resolve"   # /etc/resolv.conf -> here on systemd-resolve
 class SandboxSpec:
     workspace: Path                                          # the only writable dir (agent cwd)
     allow: list[Path] = field(default_factory=list)          # ro-bind (granted inputs + in-repo tools)
+    rw_binds: list[Path] = field(default_factory=list)       # read-WRITE bind (agent state dirs outside
+                                                             #   the workspace, e.g. a CLI's ~/.claude
+                                                             #   session/cache under an otherwise-ro home)
     deny: list[Path] = field(default_factory=list)           # tmpfs-mask (answers / other agents' work)
     mask_files: list[Path] = field(default_factory=list)     # /dev/null overlay (per-file answers)
     extra_binds: list[Path] = field(default_factory=list)    # ro-bind toolchain dirs outside the repo
@@ -82,6 +85,11 @@ def bwrap_argv(spec: SandboxSpec) -> list[str]:
     for p in spec.extra_binds:
         if _kind(Path(p)) != "missing":
             parts += ["--ro-bind", str(p), str(p)]
+    # rw binds AFTER the ro allow/extra binds so a writable state dir overrides a broad ro allow
+    # (e.g. ~/.claude writable under an otherwise read-only $HOME), but BEFORE the deny masks below.
+    for p in spec.rw_binds:
+        if _kind(Path(p)) != "missing":
+            parts += ["--bind", str(p), str(p)]
     # deny wins: mask AFTER allow/extra binds
     for p in spec.deny:
         if _kind(Path(p)) == "dir":

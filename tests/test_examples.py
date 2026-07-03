@@ -3,7 +3,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 
 # Make sure the examples directory is importable
 _EXAMPLES = Path(__file__).parent.parent / "examples"

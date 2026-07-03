@@ -1,6 +1,4 @@
 """Tests for aet.core.run_manifest.RunManifest."""
-import pytest
-from pathlib import Path
 
 from aet.core.run_manifest import RunManifest
 from aet.core.run_spec import RunSpec

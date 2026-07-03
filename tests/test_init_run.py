@@ -1,8 +1,6 @@
 """Test that init_run creates expected directory structures."""
 import logging
 
-import pytest
-from pathlib import Path
 
 from aet.core.run_spec import RunSpec
 from aet.core.run_paths import RunPaths

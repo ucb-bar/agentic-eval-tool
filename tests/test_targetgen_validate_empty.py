@@ -1,6 +1,5 @@
 """Test that TargetGenSuite.validate on an empty run returns partial/fail, never crashes."""
 import pytest
-from pathlib import Path
 
 from aet.suites import get_suite
 from aet.core.run_spec import RunSpec

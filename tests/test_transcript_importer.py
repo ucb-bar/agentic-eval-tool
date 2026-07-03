@@ -8,7 +8,6 @@ Plus: multiple session files order by timestamp and concatenate as rounds; a ter
 is recorded as the last round's verdict + a single end-of-run milestone; no signal → degrades.
 """
 import json
-from pathlib import Path
 
 from aet.trajectory.importers.transcript import import_transcript
 

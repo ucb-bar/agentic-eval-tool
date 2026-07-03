@@ -44,7 +44,6 @@ class RunManifest:
 
     @classmethod
     def create(cls, spec, run_id: str, git_hash: str) -> "RunManifest":
-        from aet.core.run_spec import RunSpec
         now = datetime.now(tz=timezone.utc).isoformat()
         obs = {
             "tracking_mode": spec.tracking_mode,

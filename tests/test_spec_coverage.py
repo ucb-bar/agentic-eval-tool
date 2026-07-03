@@ -1,9 +1,8 @@
 """Tests for spec-required additions: expanded failures, artifact fields, run_spec fields, new logger methods."""
 import json
 import pytest
-from pathlib import Path
 from aet.core.failures import FailureCategory, FailureRecord
-from aet.core.artifact_store import ArtifactStore, ArtifactOrigin, ArtifactRecord
+from aet.core.artifact_store import ArtifactStore, ArtifactOrigin
 from aet.tracking.run_logger import EvalRunLogger
 
 
@@ -76,8 +75,10 @@ def test_artifact_record_kind_and_iteration(tmp_path):
     assert rec.line_count == 1
 
 def test_artifact_store_find_by_kind(tmp_path):
-    f1 = tmp_path / "a.sv"; f1.write_text("x\n")
-    f2 = tmp_path / "b.log"; f2.write_text("y\n")
+    f1 = tmp_path / "a.sv"
+    f1.write_text("x\n")
+    f2 = tmp_path / "b.log"
+    f2.write_text("y\n")
     store = ArtifactStore(tmp_path, run_id="r1")
     store.record(f1, ArtifactOrigin.AGENT_WRITTEN, kind="rtl")
     store.record(f2, ArtifactOrigin.ORACLE_OUTPUT, kind="log")
@@ -86,13 +87,15 @@ def test_artifact_store_find_by_kind(tmp_path):
     assert len(store.find_by_kind("tb")) == 0
 
 def test_artifact_store_find_protected(tmp_path):
-    f = tmp_path / "tb.sv"; f.write_text("tb\n")
+    f = tmp_path / "tb.sv"
+    f.write_text("tb\n")
     store = ArtifactStore(tmp_path, run_id="r1")
     store.record(f, ArtifactOrigin.PROTECTED_EVALUATOR, protected=True)
     assert len(store.find_protected()) == 1
 
 def test_artifact_manifest_has_new_fields(tmp_path):
-    f = tmp_path / "rtl.sv"; f.write_text("module m();\nendmodule\n")
+    f = tmp_path / "rtl.sv"
+    f.write_text("module m();\nendmodule\n")
     store = ArtifactStore(tmp_path, run_id="r1")
     store.record(f, ArtifactOrigin.AUTHORED, kind="rtl", created_at_iteration=1)
     manifest = json.loads((tmp_path / "artifact_manifest.json").read_text())

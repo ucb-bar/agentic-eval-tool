@@ -24,21 +24,10 @@ openllmetry = [
 ]
 ray    = ["ray[default]>=2.40"]
 viz    = ["matplotlib>=3.7", "numpy>=1.24"]
+docs   = ["mkdocs>=1.6", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26"]
 dev    = ["pytest>=8.0", "ruff", "jsonschema>=4.0"]
-all    = [
-    "matplotlib>=3.7",
-    "numpy>=1.24",
-    "mlflow>=2.20",
-    "opentelemetry-api>=1.28",
-    "opentelemetry-sdk>=1.28",
-    "opentelemetry-exporter-otlp-proto-http>=1.28",
-    "jsonschema>=4.0",
-    "opentelemetry-instrumentation-anthropic>=0.55",
-    "opentelemetry-instrumentation-openai>=0.55",
-    "ray[default]>=2.40",
-    "pytest>=8.0",
-    "ruff",
-]
+# `all` composes the other extras (single source of truth — no hand-duplicated pins).
+all    = ["aet[tracking,openllmetry,ray,viz,docs,dev]"]
 
 [project.scripts]
 aet = "aet.cli.main:main"
@@ -52,3 +41,21 @@ where = ["src"]
     "templates/**/.gitkeep",
     "suites/targetgen/schemas/*.json",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Ruff's default rule set: pyflakes (F) + pycodestyle E4 (imports) / E7 (statements) / E9 (syntax).
+# Line length (E501) is intentionally left to a formatter — the bar here is "clean, not pedantic".
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests idiomatically use short loop vars (`l`) and manipulate sys.path before importing local
+# example modules — both are fine in test code, not shipped library code.
+"tests/**" = ["E741", "E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

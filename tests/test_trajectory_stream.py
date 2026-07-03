@@ -1,5 +1,4 @@
 """TrajectoryStream: incremental build, provisional-until-result, tail a file."""
-import json
 
 from aet.trajectory.classify import ActivityClassifier, capsule_bench_config
 from aet.trajectory.stream import TrajectoryStream

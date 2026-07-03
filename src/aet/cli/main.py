@@ -690,7 +690,6 @@ def _cmd_show(args) -> None:
     trace_id = params.get("aet.otel_trace_id", "")
     mlflow_run_id = params.get("mlflow_run_id", "")
     mlflow_uri = params.get("mlflow_tracking_uri", "")
-    mlflow_exp = params.get("mlflow_experiment_name", "")
     if trace_id:
         print(f"    signoz   http://localhost:8080/trace/{trace_id}")
     if mlflow_run_id and mlflow_uri:

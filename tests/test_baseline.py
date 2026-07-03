@@ -1,8 +1,6 @@
 """Tests for aet baseline set/show and regression detection."""
 import json
 import logging
-import pytest
-from pathlib import Path
 
 from aet.core.run_spec import RunSpec
 from aet.core.run_paths import RunPaths

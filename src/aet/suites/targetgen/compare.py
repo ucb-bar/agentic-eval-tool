@@ -9,10 +9,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
 
 from aet.suites.targetgen.collect_metrics import _ALL_COLUMNS, _STRING_COLUMNS
-from aet.core.metrics import welch_ttest, confidence_interval, effect_size
+from aet.core.metrics import welch_ttest, effect_size
 
 
 def _load_run(run_dir: Path) -> dict | None:

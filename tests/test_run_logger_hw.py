@@ -1,8 +1,6 @@
 """Tests for new hardware-benchmark EvalRunLogger methods."""
 import json
 import logging
-import pytest
-from pathlib import Path
 from aet.tracking.run_logger import EvalRunLogger
 
 _logger = logging.getLogger(__name__)

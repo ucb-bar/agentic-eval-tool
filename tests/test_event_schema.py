@@ -1,7 +1,6 @@
 """Tests for enriched event schema (event_id, sequence, stage, actor, refs)."""
 import json
 import logging
-import pytest
 from aet.tracking.run_logger import EvalRunLogger
 
 _logger = logging.getLogger(__name__)
@@ -53,7 +52,7 @@ def test_rich_event_has_stage_and_actor(tmp_path):
 
 def test_rich_event_output_refs(tmp_path):
     logger = _make_logger(tmp_path)
-    eid = logger.log_prompt_sent("/tmp/prompt.txt", prompt_hash="abc123")
+    logger.log_prompt_sent("/tmp/prompt.txt", prompt_hash="abc123")
     logger.finish("pass")
     evs = _events(tmp_path)
     prompt_ev = next(e for e in evs if e["event"] == "prompt.sent")

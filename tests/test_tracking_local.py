@@ -1,7 +1,5 @@
 """Test EvalRunLogger in local mode."""
 import json
-import pytest
-from pathlib import Path
 
 from aet.tracking import EvalRunLogger
 

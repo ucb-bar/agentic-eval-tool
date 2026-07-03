@@ -1,6 +1,5 @@
 """Tests for aet.suites.targetgen.architecture_rules."""
 import pytest
-from pathlib import Path
 
 from aet.suites.targetgen.architecture_rules import (
     check_all,

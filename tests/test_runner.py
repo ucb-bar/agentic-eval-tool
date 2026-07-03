@@ -120,9 +120,12 @@ def test_resume_run_reads_session_from_manifest(tmp_path):
 
 def test_bwrap_argv_deny_after_allow_ordering(tmp_path):
     # pure-string sandbox check: workspace bound rw, allow ro-bound, deny tmpfs-masked AFTER allow
-    ws = tmp_path / "ws"; ws.mkdir()
-    allowed = tmp_path / "tools"; allowed.mkdir()
-    denied = tmp_path / "tools" / "answers"; denied.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    allowed = tmp_path / "tools"
+    allowed.mkdir()
+    denied = tmp_path / "tools" / "answers"
+    denied.mkdir()
     argv = bwrap_argv(SandboxSpec(workspace=ws, allow=[allowed], deny=[denied]))
     assert "--bind" in argv and str(ws) in argv          # workspace writable
     assert "--ro-bind" in argv                            # allow bound read-only

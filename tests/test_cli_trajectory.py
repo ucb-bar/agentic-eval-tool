@@ -1,8 +1,6 @@
 """CLI smoke: `aet import` writes a parseable trajectory.json."""
-import json
 import subprocess
 import sys
-from pathlib import Path
 
 from aet.trajectory.model import RunTrajectory
 from tests.test_trajectory_import import _make_run

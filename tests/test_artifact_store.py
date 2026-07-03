@@ -1,8 +1,6 @@
 """Tests for aet.core.artifact_store."""
 import json
-import pytest
-from pathlib import Path
-from aet.core.artifact_store import ArtifactStore, ArtifactOrigin, ArtifactRecord
+from aet.core.artifact_store import ArtifactStore, ArtifactOrigin
 
 
 def _write(tmp_path, name, content="hello"):

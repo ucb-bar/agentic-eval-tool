@@ -40,6 +40,27 @@ class TestSandboxArgv:
         assert argv.index(str(denied)) > argv.index(str(allowed))   # deny applied after allow
         assert "--tmpfs" in argv and str(denied) in argv
 
+    def test_rw_bind_after_allow_and_before_deny(self, tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        home = tmp_path / "home"
+        home.mkdir()
+        state = home / ".claude"        # writable state dir under an otherwise ro-bound home
+        state.mkdir()
+        answers = state / "answers"     # a denied sub-path even inside the writable state dir
+        answers.mkdir()
+        argv = bwrap_argv(
+            SandboxSpec(workspace=ws, allow=[home], rw_binds=[state], deny=[answers])
+        )
+        s = " ".join(argv)
+        assert f"--ro-bind {home} {home}" in s               # home granted read-only
+        assert f"--bind {state} {state}" in s                # state writable (rw override)
+        # rw bind comes AFTER the ro allow of its parent so it wins ...
+        assert argv.index(str(state)) > argv.index(str(home))
+        # ... and BEFORE the deny mask so deny still wins over the rw bind
+        assert argv.index(str(answers)) > argv.index(str(state))
+        assert "--tmpfs" in argv and str(answers) in argv
+
     def test_mask_files_and_unsetenv_and_dns(self, tmp_path):
         ws = tmp_path / "ws"
         ws.mkdir()

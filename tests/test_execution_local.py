@@ -1,6 +1,5 @@
 """Tests for LocalExecutor."""
 import pytest
-from pathlib import Path
 
 from aet.execution import LocalExecutor
 from aet.core.run_spec import RunSpec

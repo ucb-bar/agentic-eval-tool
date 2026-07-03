@@ -1,7 +1,6 @@
 """Test that aet init-project for targetgen template works or fails gracefully."""
 import subprocess
 import sys
-from pathlib import Path
 
 
 def test_init_project_targetgen(tmp_path):

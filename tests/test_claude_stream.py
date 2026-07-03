@@ -1,7 +1,6 @@
 """Tests for the Claude Code stream-json parser."""
 import json
-import pytest
-from aet.tracking.claude_stream import parse_stream, ClaudeStreamResult, ToolCall
+from aet.tracking.claude_stream import parse_stream
 
 
 def _make_stream(*events) -> str:

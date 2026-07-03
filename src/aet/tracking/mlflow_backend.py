@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tarfile
-import tempfile
 from pathlib import Path
 from typing import Any
 
