@@ -5,6 +5,19 @@ All notable changes to `aet` are recorded here.
 ## [Unreleased]
 
 ### Added
+- **Tests-passing CLIMB mined from oracle invocations (`aet.trajectory.oracle`)** — reconstructs the
+  tests-over-time progression from the transcript itself: each `./run.sh` (testbench) invocation the
+  agent runs becomes a `k/N` milestone at its wall time. Retroactive (works on existing runs), no
+  harness change. Rejects a different testbench by suite-size mismatch.
+  `import_transcript(oracle_markers=…)` + `classify.spec_to_rtl_config()` (verilator/`run.sh` →
+  tool-wait band) reproduce the reference `rate-panels` figure for abc-testing spec-to-rtl.
+- **`aet plot-sessions`** — point at raw Claude session transcripts (files or dirs) and render the
+  comparison figures in one step; no prior `aet import` needed.
+- **`k/N` terminal grade + per-lane facet scaling** — `import_transcript(n_passed=, n_total=)` records
+  a real fraction (e.g. `182/182 cases`), and `plot_tests_facets` scales each lane to its own suite
+  size so heterogeneous arms aren't dwarfed.
+- **Adaptive `$`-label precision** — figure cost labels show cents below \$10, so small-per-session
+  sweeps don't collapse to `$2`.
 - **Sandboxed agent runner (`aet run` / `aet.runner`)** — a single Claude Code invocation launched
   inside a deny-by-default `aet.isolation` bwrap sandbox, streamed to a transcript, recorded as a
   `RunTrajectory`, and materialized into a canonical aet run (manifest + `logs/` +
@@ -35,8 +48,6 @@ All notable changes to `aet` are recorded here.
 - **`claude_stream` robustness** — the parser now tolerates string content-blocks (desktop/app
   session logs carry a `user` message's `content` as a plain string), so real session logs import
   without crashing.
-
-### Added
 - **Agentic trajectory recording (`aet.trajectory`)** — canonical, repo-agnostic record of what an
   agent did over time: cumulative tokens (input/output/cache), cumulative cost, an activity timeline
   (thinking / reading / writing / bash / long tool-waits), and external-oracle test-pass milestones.
@@ -90,6 +101,21 @@ All notable changes to `aet` are recorded here.
   `compare()` calls write `regression_report.md` flagging runs where cost >1.2× baseline or
   score <baseline−0.05.
 - **`aet runs`** and **`aet show`** CLI subcommands for listing and inspecting recorded runs.
+
+### Changed
+- **Lint-clean + enforced**: repo is `ruff`-clean; `[tool.ruff]`/`[tool.pytest.ini_options]` pinned in
+  `pyproject.toml`; the `all` extra now composes the other extras (single source of truth) + a new
+  `[docs]` extra.
+- **De-branded viz API**: `use_merlin_style()` → `use_house_style()` (deprecated alias kept).
+- **CLI de-godded**: `cli/main.py` (1379 LOC) split into a thin argparse table + `cli/_common.py` +
+  `cli/commands/{lifecycle,reporting,trajectory}.py`. No behavior change.
+- **Logging**: tracking warnings emit via `logging` (silent by default) instead of raw `print`.
+
+### Docs
+- Rewritten `README.md` (the real record→plot / sandboxed-run surface), a root `AGENTS.md`
+  (architecture map + "how to add X" recipes + Definition-of-Done), `docs/ARCHITECTURE.md`, ADRs under
+  `docs/adr/`, and an auto-generated API site (mkdocstrings). `tests/test_docs.py` + `mkdocs build
+  --strict` in CI keep docs from drifting.
 
 ## [0.1.0] — 2026-05-01
 
