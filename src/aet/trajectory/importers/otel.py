@@ -137,12 +137,7 @@ def build_from_otel_events(events: list[dict], *, n_passed=None, n_total=1, tool
     tools = [e for e in events if e["name"] == "claude_code.tool_result"]
     if not reqs:
         return None
-    t0 = min(e["t_ns"] for e in events if e["t_ns"] > 0)
 
-    def sec(e):
-        return max(0.0, (e["t_ns"] - t0) / 1e9)
-
-    # cumulative token/cost curve from api_request turns (real per-turn values + real time)
     def _i(a, k):
         try:
             return int(a.get(k) or 0)
@@ -155,52 +150,57 @@ def build_from_otel_events(events: list[dict], *, n_passed=None, n_total=1, tool
         except (TypeError, ValueError):
             return 0.0
 
+    # t0 = earliest activity START = min(completion − duration): a turn's work precedes its
+    # completion timestamp, so anchoring at the first completion would drop the first turn's span.
+    t0 = min((e["t_ns"] - int(_f(e["attrs"], "duration_ms") * 1e6))
+             for e in events if e["t_ns"] > 0)
+
+    def sec(e):
+        return max(0.0, (e["t_ns"] - t0) / 1e9)
+
+    # CRITICAL: a log event's ``timeUnixNano`` is the event's COMPLETION time, and ``duration_ms`` is
+    # how long that api call / tool ran. So each event's real span is [t − duration, t] (the work
+    # happened BEFORE the completion timestamp). A 14-min extended-thinking turn shows up as one
+    # api_request completing at T with duration≈840s → span [T−840, T]. The wall duration is the last
+    # completion time, NOT max(start+duration) — durations laid forward would overlap/overshoot.
     pts = []
     cin = cout = ccache = ccost = 0.0
-    end_ns = t0
     for e in sorted(reqs, key=lambda e: (e["t_ns"], e["seq"])):
         a = e["attrs"]
         cin += _i(a, "input_tokens") + _i(a, "cache_creation_tokens")
         cout += _i(a, "output_tokens")
         ccache += _i(a, "cache_read_tokens")
         ccost += _f(a, "cost_usd")
-        end_t = e["t_ns"] + int(_f(a, "duration_ms") * 1e6)
-        end_ns = max(end_ns, end_t)
         pts.append(TrajectoryPoint(t_s=sec(e), cum_input_tokens=cin, cum_output_tokens=cout,
                                    cum_cache_tokens=ccache, cum_cost_usd=round(ccost, 6)))
-    for e in tools:
-        end_ns = max(end_ns, e["t_ns"] + int(_f(e["attrs"], "duration_ms") * 1e6))
-    dur_s = max(0.001, (end_ns - t0) / 1e9)
-    # ensure the final point lands at the true end
-    if pts and pts[-1].t_s < dur_s:
-        pts[-1] = TrajectoryPoint(t_s=dur_s, cum_input_tokens=pts[-1].cum_input_tokens,
-                                  cum_output_tokens=pts[-1].cum_output_tokens,
-                                  cum_cache_tokens=pts[-1].cum_cache_tokens,
-                                  cum_cost_usd=pts[-1].cum_cost_usd)
+    dur_s = max(0.001, max(sec(e) for e in events))     # last completion ≈ subprocess wall
 
-    # activity bands: a CONTIGUOUS, NON-OVERLAPPING partition. Each event contributes a span of its
-    # exact OTel-reported duration; a cursor (start = max(real_start, prev_end)) prevents overlap
-    # (raw api_request/tool spans can overlap, e.g. a parallel auxiliary call). Residual wall-time
-    # between spans stays as honest idle (uncovered). Per-category band time thus == the OTel
-    # duration sum for that category (see activity_breakdown) — the share is ground-truth.
+    # activity bands: completion-anchored spans [t−duration, t], laid out as a NON-OVERLAPPING
+    # partition. Sort by completion time; clamp each span's start up to the previous end so
+    # sequential turns never overlap (and a stray long/parallel duration can't overshoot). Per-
+    # category band time == the OTel duration sum (activity_breakdown) — the share is ground-truth;
+    # residual wall-time between spans is honest idle.
     spans = []
     for e in reqs:
-        spans.append((sec(e), "think", _f(e["attrs"], "duration_ms") / 1000.0))
+        d = _f(e["attrs"], "duration_ms") / 1000.0
+        spans.append((sec(e), "think", d))
     for e in tools:
         cat = _tool_category(str(e["attrs"].get("tool_name") or ""), _f(e["attrs"], "duration_ms"),
                              tool_cmds.get(e["attrs"].get("tool_use_id")))
         spans.append((sec(e), cat, _f(e["attrs"], "duration_ms") / 1000.0))
-    spans.sort(key=lambda s: s[0])
+    spans.sort(key=lambda s: s[0])                       # by completion time
     bands = []
-    cursor = 0.0
-    for start, cat, d in spans:
+    prev_end = 0.0
+    for end_s, cat, d in spans:
         if d <= 0:
             continue
-        s0 = max(start, cursor)
-        s1 = s0 + d
+        s0 = max(end_s - d, prev_end)                    # span ends at completion; clamp start ≥ prev
+        s1 = max(end_s, s0)
+        if s1 - s0 < 1e-9:
+            continue
         bands.append(ActivityBand(category=cat, t0_s=s0, t1_s=s1))
-        cursor = s1
-    dur_s = max(dur_s, cursor)
+        prev_end = s1
+    dur_s = max(dur_s, prev_end)
 
     totals = {"input": int(cin), "output": int(cout), "cache": int(ccache), "cost": round(ccost, 6)}
     milestones = []

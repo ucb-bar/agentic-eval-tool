@@ -26,15 +26,18 @@ def _tool(seq, t_ns, name, dur_ms):
             "attrs": {"tool_name": name, "duration_ms": dur_ms, "success": "true"}}
 
 
-# A controlled run: 3 API turns + 2 tools, with distinct per-turn shapes and real durations.
+# A controlled run: 3 API turns + 2 tools. timeUnixNano is the COMPLETION time; duration_ms is how
+# long the work took → real span = [completion − duration, completion]. Chosen to tile perfectly
+# (no overlap, no gap): think [0,2]+[2.5,7.5]+[19.5,21]=8.5s, read [2,2.5]=0.5s, tool [7.5,19.5]=12s.
 def _events():
     B = 1_000_000_000_000_000_000  # base ns
+    S = 1_000_000_000              # 1s in ns
     return [
-        _req(2, B + 0,               inp=500, out=100, cr=0,     cc=0,   cost=0.10, dur_ms=2000),
-        _tool(3, B + 2_000_000_000,  "Read", 50),
-        _req(4, B + 3_000_000_000,   inp=5,   out=800, cr=10000, cc=200, cost=0.50, dur_ms=5000),
-        _tool(5, B + 8_000_000_000,  "Bash", 12000),   # long Bash → tool-wait (verilator via checker)
-        _req(6, B + 20_000_000_000,  inp=5,   out=300, cr=20000, cc=0,   cost=0.30, dur_ms=1500),
+        _req(2,  B + 2 * S,           inp=500, out=100, cr=0,     cc=0,   cost=0.10, dur_ms=2000),
+        _tool(3, B + 2 * S + 500_000_000, "Read", 500),
+        _req(4,  B + 7 * S + 500_000_000, inp=5, out=800, cr=10000, cc=200, cost=0.50, dur_ms=5000),
+        _tool(5, B + 19 * S + 500_000_000, "Bash", 12000),  # 12s Bash → tool-wait
+        _req(6,  B + 21 * S,          inp=5,   out=300, cr=20000, cc=0,   cost=0.30, dur_ms=1500),
     ]
 
 
@@ -64,20 +67,20 @@ class TestOtelTokens:
         assert max(ratios) - min(ratios) > 0.1
 
     def test_times_are_real_not_interpolated(self):
-        # points sit at the real api_request wall-times (0s, 3s, 20s from base)
+        # points sit at the real api_request COMPLETION wall-times (2s, 7.5s, 21s from the first start)
         pts, *_ = build_from_otel_events(_events())
         ts = [round(p.t_s, 1) for p in pts]
-        assert ts[0] == 0.0 and 2.9 < ts[1] < 3.1 and ts[2] >= 20.0
+        assert ts[0] == 2.0 and 7.4 < ts[1] < 7.6 and 20.9 < ts[2] < 21.1
 
 
 class TestOtelActivity:
     def test_breakdown_is_exact_sum_of_otel_durations(self):
         # GROUND TRUTH: activity seconds per category == Σ OTel duration_ms for that category.
-        # think = 2+5+1.5 = 8.5s; tool (12s Bash); read (0.05s). No heuristic, no layout.
+        # think = 2+5+1.5 = 8.5s; tool = 12s Bash; read = 0.5s. No heuristic, no layout.
         bd = activity_breakdown(_events())
         assert abs(bd["think"] - 8.5) < 1e-6
         assert abs(bd["tool"] - 12.0) < 1e-6
-        assert abs(bd["read"] - 0.05) < 1e-6
+        assert abs(bd["read"] - 0.5) < 1e-6
 
     def test_bands_partition_no_overlap(self):
         # the fix for the real bug: bands are a contiguous NON-OVERLAPPING partition
