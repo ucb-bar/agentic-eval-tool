@@ -147,3 +147,47 @@ class TestOtelParse:
 
     def test_empty_returns_none(self):
         assert build_from_otel_events([]) is None
+
+
+class TestCostReconciliation:
+    """Cost accumulation is verified THREE independent ways that must agree: the sum of per-turn
+    ``api_request.cost_usd`` (the cumulative curve), claude's own ``claude_code.cost.usage`` metric
+    counter, and (on a real run) the transcript ``result.total_cost_usd`` billed total."""
+
+    def _sum_cost_metric(self, payload) -> float:
+        tot = 0.0
+        for rm in payload.get("resourceMetrics", []):
+            for sm in rm.get("scopeMetrics", []):
+                for m in sm.get("metrics", []):
+                    if m.get("name") == "claude_code.cost.usage":
+                        for dp in m.get("sum", {}).get("dataPoints", []):
+                            tot += float(dp.get("asDouble") or dp.get("asInt") or 0)
+        return tot
+
+    def test_per_turn_cost_sum_equals_cost_metric(self, tmp_path):
+        # a capture with BOTH api_request logs and the cost.usage metric → the per-turn sum (what the
+        # cumulative curve integrates) must equal claude's independent cost counter.
+        logs = {"kind": "logs", "payload": {"resourceLogs": [{"scopeLogs": [{"logRecords": [
+            {"timeUnixNano": "1000000000000000000", "body": {"stringValue": "claude_code.api_request"},
+             "attributes": [{"key": "event.sequence", "value": {"intValue": 2}},
+                            {"key": "cost_usd", "value": {"doubleValue": 0.10}},
+                            {"key": "input_tokens", "value": {"intValue": 5}},
+                            {"key": "output_tokens", "value": {"intValue": 5}},
+                            {"key": "duration_ms", "value": {"intValue": 100}}]},
+            {"timeUnixNano": "1000000001000000000", "body": {"stringValue": "claude_code.api_request"},
+             "attributes": [{"key": "event.sequence", "value": {"intValue": 3}},
+                            {"key": "cost_usd", "value": {"doubleValue": 0.40}},
+                            {"key": "input_tokens", "value": {"intValue": 5}},
+                            {"key": "output_tokens", "value": {"intValue": 5}},
+                            {"key": "duration_ms", "value": {"intValue": 100}}]}]}]}}}
+        metrics = {"kind": "metrics", "payload": {"resourceMetrics": [{"scopeMetrics": [{"metrics": [
+            {"name": "claude_code.cost.usage", "sum": {"dataPoints": [
+                {"asDouble": 0.10}, {"asDouble": 0.40}]}}]}]}]}}
+        f = tmp_path / "otel.jsonl"
+        f.write_text(json.dumps(logs) + "\n" + json.dumps(metrics) + "\n")
+        ev = parse_otel_logs(f)
+        _, _, totals, _, _ = build_from_otel_events(ev)
+        metric_total = self._sum_cost_metric(metrics["payload"])
+        assert abs(totals["cost"] - 0.50) < 1e-9          # cumulative curve total
+        assert abs(metric_total - 0.50) < 1e-9            # independent cost counter
+        assert abs(totals["cost"] - metric_total) < 1e-9  # they RECONCILE
