@@ -56,12 +56,19 @@ def rate_series(traj: RunTrajectory, series: str = "input", win: int | None = No
     tu, au = t[keep], arr[keep]
     if len(tu) < 4:
         return tu, np.zeros_like(au)
-    r = np.gradient(au, tu)
-    w = win or (max(7, len(r) // 22) | 1)
+    # Resample the (monotonic) cumulative curve onto a uniform fine grid before differentiating, so
+    # the rate line is smooth and evenly spaced instead of lurching across widely-spaced turns. This
+    # is faithful: a flat cumulative stretch (e.g. a long tool-wait with no tokens) interpolates to a
+    # flat segment → gradient 0, so genuine zero-rate waits are preserved, not smeared into a ramp.
+    ng = max(len(tu), 240)
+    gu = np.linspace(tu[0], tu[-1], ng)
+    cu = np.interp(gu, tu, au)
+    r = np.gradient(cu, gu)
+    w = win or (max(9, ng // 30) | 1)
     k = np.hanning(w)
     k /= k.sum()
     r = np.convolve(np.pad(r, w // 2, mode="edge"), k, mode="valid")[:len(r)]
-    return tu, np.clip(r, 0.0, None)
+    return gu, np.clip(r, 0.0, None)
 
 
 # --------------------------------------------------------------------- panel pieces

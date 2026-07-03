@@ -145,5 +145,13 @@ def spec_to_rtl_config() -> ActivityConfig:
     testbench oracle (``./run.sh``, ``run_test.py``, ``verilator``) is a long external wait → the
     ``tool`` lane, so it reads as the distinct 'tool wait' band (matching the reference figures)."""
     return ActivityConfig(long_wait_rules=[
-        LongWaitRule("Bash", ["run.sh", "run_test.py", "verilator"], category="tool"),
+        # ./run.sh / run_test.py / verilator are the obvious oracle invocations; the build/sim
+        # scaffolding (verilator's obj_dir/sim_build, the *_test build dirs, make/cmake, and a
+        # /usr/bin/time-wrapped build) is *also* a long external wait — without these markers a
+        # clean rebuild that never literally prints "verilator" lands in the ordinary `bash` lane
+        # and shows up as a giant green block instead of the red tool-wait it really is.
+        LongWaitRule("Bash", [
+            "run.sh", "run_test.py", "verilator", "obj_dir", "sim_build",
+            "make ", "cmake", "/usr/bin/time",
+        ], category="tool"),
     ])
