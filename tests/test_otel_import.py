@@ -164,29 +164,38 @@ class TestCostReconciliation:
                             tot += float(dp.get("asDouble") or dp.get("asInt") or 0)
         return tot
 
+    @staticmethod
+    def _apireq_record(t_ns, seq, cost):
+        attrs = [{"key": "event.sequence", "value": {"intValue": seq}},
+                 {"key": "cost_usd", "value": {"doubleValue": cost}},
+                 {"key": "input_tokens", "value": {"intValue": 5}},
+                 {"key": "output_tokens", "value": {"intValue": 5}},
+                 {"key": "duration_ms", "value": {"intValue": 100}}]
+        return {"timeUnixNano": str(t_ns), "body": {"stringValue": "claude_code.api_request"},
+                "attributes": attrs}
+
+    @staticmethod
+    def _logs_env(records):
+        return {"kind": "logs",
+                "payload": {"resourceLogs": [{"scopeLogs": [{"logRecords": records}]}]}}
+
+    @staticmethod
+    def _metrics_env(costs):
+        dps = [{"asDouble": c} for c in costs]
+        metric = {"name": "claude_code.cost.usage", "sum": {"dataPoints": dps}}
+        return {"kind": "metrics",
+                "payload": {"resourceMetrics": [{"scopeMetrics": [{"metrics": [metric]}]}]}}
+
     def test_per_turn_cost_sum_equals_cost_metric(self, tmp_path):
         # a capture with BOTH api_request logs and the cost.usage metric → the per-turn sum (what the
         # cumulative curve integrates) must equal claude's independent cost counter.
-        logs = {"kind": "logs", "payload": {"resourceLogs": [{"scopeLogs": [{"logRecords": [
-            {"timeUnixNano": "1000000000000000000", "body": {"stringValue": "claude_code.api_request"},
-             "attributes": [{"key": "event.sequence", "value": {"intValue": 2}},
-                            {"key": "cost_usd", "value": {"doubleValue": 0.10}},
-                            {"key": "input_tokens", "value": {"intValue": 5}},
-                            {"key": "output_tokens", "value": {"intValue": 5}},
-                            {"key": "duration_ms", "value": {"intValue": 100}}]},
-            {"timeUnixNano": "1000000001000000000", "body": {"stringValue": "claude_code.api_request"},
-             "attributes": [{"key": "event.sequence", "value": {"intValue": 3}},
-                            {"key": "cost_usd", "value": {"doubleValue": 0.40}},
-                            {"key": "input_tokens", "value": {"intValue": 5}},
-                            {"key": "output_tokens", "value": {"intValue": 5}},
-                            {"key": "duration_ms", "value": {"intValue": 100}}]}]}]}}}
-        metrics = {"kind": "metrics", "payload": {"resourceMetrics": [{"scopeMetrics": [{"metrics": [
-            {"name": "claude_code.cost.usage", "sum": {"dataPoints": [
-                {"asDouble": 0.10}, {"asDouble": 0.40}]}}]}]}]}}
+        costs = [0.10, 0.40]
+        logs = self._logs_env([self._apireq_record(1_000_000_000_000_000_000, 2, costs[0]),
+                               self._apireq_record(1_000_000_001_000_000_000, 3, costs[1])])
+        metrics = self._metrics_env(costs)
         f = tmp_path / "otel.jsonl"
         f.write_text(json.dumps(logs) + "\n" + json.dumps(metrics) + "\n")
-        ev = parse_otel_logs(f)
-        _, _, totals, _, _ = build_from_otel_events(ev)
+        _, _, totals, _, _ = build_from_otel_events(parse_otel_logs(f))
         metric_total = self._sum_cost_metric(metrics["payload"])
         assert abs(totals["cost"] - 0.50) < 1e-9          # cumulative curve total
         assert abs(metric_total - 0.50) < 1e-9            # independent cost counter
