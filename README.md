@@ -93,7 +93,7 @@ aet compare --suite targetgen --plots
 |---|---|---|
 | `[viz]` | matplotlib, numpy | the figures (`plot`, `plot-sessions`, `compare --plots`) |
 | `[tracking]` | mlflow, opentelemetry | MLflow dashboards + OTel tracing |
-| `[ray]` | ray | parallel sweep execution |
+| `[ray]` | ray | parallel sweep execution (backend is a skeleton — see docs) |
 | `[docs]` | mkdocs, mkdocstrings | build the docs site (`mkdocs serve`) |
 | `[dev]` | pytest, ruff | development |
 | `[all]` | all of the above | |

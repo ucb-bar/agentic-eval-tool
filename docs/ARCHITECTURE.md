@@ -46,4 +46,5 @@
 reporting,trajectory}.py` with shared helpers in `cli/_common.py`. Adding a verb = add a handler +
 register it in `main()`.
 
-For "how to extend", see [AGENTS.md](../AGENTS.md).
+For "how to extend", see
+[AGENTS.md](https://github.com/ucb-bar/agentic-eval-tool/blob/main/AGENTS.md).

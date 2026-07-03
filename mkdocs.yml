@@ -1,0 +1,62 @@
+site_name: aet — Agentic Eval Tool
+site_description: Repo-agnostic harness to run, record, and visualize agentic coding runs.
+repo_url: https://github.com/ucb-bar/agentic-eval-tool
+repo_name: ucb-bar/agentic-eval-tool
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: indigo
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_source: true
+            members_order: source
+            separate_signature: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Guides:
+    - Trajectories: trajectory.md
+    - Architecture: ARCHITECTURE.md
+    - Isolation & sandboxing: isolation.md
+    - Philosophy: philosophy.md
+  - Tracking & execution:
+    - Tracking policy: tracking_policy.md
+    - MLflow: mlflow_tracking.md
+    - OpenTelemetry: opentelemetry.md
+    - GenAI semconv: genai_semconv.md
+    - SigNoz (optional): signoz_optional.md
+    - Execution backends: execution_backends.md
+    - Ray backend: ray_backend.md
+  - Bundled suite (targetgen):
+    - Overview: targetgen_suite.md
+    - Metrics: targetgen_metrics.md
+    - Architecture rules: targetgen_architecture_rules.md
+  - Decisions (ADRs):
+    - Transcript oracle mining: adr/0001-transcript-oracle-mining.md
+    - Provisional session-log cost: adr/0002-session-log-provisional-cost.md
+    - bwrap over Docker: adr/0003-bwrap-over-docker.md
+  - API reference:
+    - aet.trajectory: reference/trajectory.md
+    - aet.viz: reference/viz.md
+    - aet.isolation: reference/isolation.md
+    - aet.runner & ratelimit: reference/runner.md
+    - aet.tracking: reference/tracking.md
