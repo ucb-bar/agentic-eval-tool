@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
+from aet.tracking import reports
 from aet.tracking.types import TrackingConfig, TRACKING_MODES
 from aet.tracking.local_backend import LocalBackend
 from aet.tracking.mlflow_backend import MLflowBackend
@@ -1007,48 +1008,18 @@ class EvalRunLogger:
     # Utility writers
 
     def write_run_record(self, extra: dict | None = None) -> Path:
-        """Write run_record.json to the run_path root. Returns the path."""
-        from datetime import datetime, timezone
-        run_path = self._config.run_path
-        run_path.mkdir(parents=True, exist_ok=True)
-        record: dict = {
-            "schema_version": "1.1",
-            "run_id": self._config.run_id,
-            "project": self._config.project,
-            "suite": self._config.suite,
-            "target": self._config.target,
-            "method": self._config.method,
-            "seed": self._config.seed,
-            "tracking_mode": self._config.mode,
-            "created_at": datetime.now(tz=timezone.utc).isoformat(),
-        }
-        if extra:
-            record.update(extra)
-        import json
-        path = run_path / "run_record.json"
-        path.write_text(json.dumps(record, indent=2, default=str))
-        return path
+        """Write `run_record.json` at the run root (see :mod:`aet.tracking.reports`)."""
+        c = self._config
+        return reports.write_run_record(
+            c.run_path, run_id=c.run_id, project=c.project, suite=c.suite, target=c.target,
+            method=c.method, seed=c.seed, mode=c.mode, extra=extra)
 
     def write_summary_metrics(self, extra: dict | None = None) -> Path:
-        """Write metrics/summary_metrics.json. Returns the path."""
-        from datetime import datetime, timezone
-        import json
-        metrics_dir = self._config.run_path / "metrics"
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-        summary: dict = {
-            "run_id": self._config.run_id,
-            "project": self._config.project,
-            "suite": self._config.suite,
-            "method": self._config.method,
-            "seed": self._config.seed,
-            "target": self._config.target,
-            "recorded_at": datetime.now(tz=timezone.utc).isoformat(),
-        }
-        if extra:
-            summary.update(extra)
-        path = metrics_dir / "summary_metrics.json"
-        path.write_text(json.dumps(summary, indent=2, default=str))
-        return path
+        """Write `metrics/summary_metrics.json` (see :mod:`aet.tracking.reports`)."""
+        c = self._config
+        return reports.write_summary_metrics(
+            c.run_path, run_id=c.run_id, project=c.project, suite=c.suite, method=c.method,
+            seed=c.seed, target=c.target, extra=extra)
 
     def write_eval_report(
         self,
@@ -1058,25 +1029,10 @@ class EvalRunLogger:
         coverage: list[dict] | None = None,
         extra: dict | None = None,
     ) -> Path:
-        """Write eval_report.json: per-test, per-contract, per-assertion, coverage."""
-        from datetime import datetime, timezone
-        run_path = self._config.run_path
-        run_path.mkdir(parents=True, exist_ok=True)
-        import json
-        report: dict = {
-            "schema_version": "1.0",
-            "run_id": self._config.run_id,
-            "generated_at": datetime.now(tz=timezone.utc).isoformat(),
-            "tests": tests,
-            "contracts": contracts or [],
-            "assertions": assertions or [],
-            "coverage": coverage or [],
-        }
-        if extra:
-            report.update(extra)
-        path = run_path / "eval_report.json"
-        path.write_text(json.dumps(report, indent=2, default=str))
-        return path
+        """Write `eval_report.json` (see :mod:`aet.tracking.reports`)."""
+        return reports.write_eval_report(
+            self._config.run_path, run_id=self._config.run_id, tests=tests, contracts=contracts,
+            assertions=assertions, coverage=coverage, extra=extra)
 
     def write_metrics_structured(
         self,
@@ -1085,24 +1041,10 @@ class EvalRunLogger:
         process: dict,
         extra: dict | None = None,
     ) -> Path:
-        """Write metrics.json with cost/quality/process structure per spec."""
-        from datetime import datetime, timezone
-        run_path = self._config.run_path
-        run_path.mkdir(parents=True, exist_ok=True)
-        import json
-        metrics: dict = {
-            "schema_version": "1.0",
-            "run_id": self._config.run_id,
-            "generated_at": datetime.now(tz=timezone.utc).isoformat(),
-            "cost": cost,
-            "quality": quality,
-            "process": process,
-        }
-        if extra:
-            metrics.update(extra)
-        path = run_path / "metrics.json"
-        path.write_text(json.dumps(metrics, indent=2, default=str))
-        return path
+        """Write structured `metrics.json` (see :mod:`aet.tracking.reports`)."""
+        return reports.write_metrics_structured(
+            self._config.run_path, run_id=self._config.run_id, cost=cost, quality=quality,
+            process=process, extra=extra)
 
     # ------------------------------------------------------------------
     def finish(self, status: str, message: str | None = None) -> None:

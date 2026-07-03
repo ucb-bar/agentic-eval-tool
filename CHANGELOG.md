@@ -115,6 +115,9 @@ All notable changes to `aet` are recorded here.
 - **CLI de-godded**: `cli/main.py` (1379 LOC) split into a thin argparse table + `cli/_common.py` +
   `cli/commands/{lifecycle,reporting,trajectory}.py`. No behavior change.
 - **Logging**: tracking warnings emit via `logging` (silent by default) instead of raw `print`.
+- **Report writers extracted**: the run-report serialization (`run_record.json`,
+  `summary_metrics.json`, `eval_report.json`, `metrics.json`) moved from `EvalRunLogger` into
+  free functions in `tracking/reports.py` (the facade delegates) — testable in isolation.
 
 ### Docs
 - Rewritten `README.md` (the real record→plot / sandboxed-run surface), a root `AGENTS.md`

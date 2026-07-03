@@ -58,10 +58,8 @@ Data flow: `transcript.jsonl → import_transcript → RunTrajectory → (emit_t
 5. New public API is reachable from the docs (`mkdocs build --strict` stays green — it fails on a
    broken/renamed reference, which is the anti-drift backstop).
 
-## Known follow-ups
-- `tracking/run_logger.py` (~1150 LOC, one **cohesive** `EvalRunLogger` facade). Big but single-
-  responsibility, so it is not a blocker. A mixin split is **not** recommended — mixins don't reduce
-  the real coupling (every method needs the facade's `self._local/_mlflow/_otel` state) and add MRO
-  indirection. If trimming: extract the pure report-**writers** (`write_summary_metrics`,
-  `write_eval_report`, `write_metrics_structured`, `write_run_record`) into a `tracking/reports.py`
-  of free functions — low-risk, reduces size *and* coupling.
+## Notes
+- `tracking/run_logger.py` is one **cohesive** `EvalRunLogger` facade — big but single-responsibility.
+  Its pure serialization now lives in `tracking/reports.py` (free functions the facade delegates to).
+  A further mixin split is **not** recommended: mixins don't reduce the real coupling (every method
+  needs the facade's `self._local/_mlflow/_otel` state) and only add MRO indirection.
