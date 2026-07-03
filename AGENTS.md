@@ -59,6 +59,12 @@ Data flow: `transcript.jsonl → import_transcript → RunTrajectory → (emit_t
    broken/renamed reference, which is the anti-drift backstop).
 
 ## Known follow-ups
-- `tracking/run_logger.py` (~1150 LOC, one cohesive `EvalRunLogger` facade) is a candidate for a
-  mixin split by concern (core / llm / eval / hw-events); deferred — its methods are interleaved, so
-  split by moving whole methods into `_logger_*.py` mixins with the tests as the guard.
+- `tracking/run_logger.py` (~1150 LOC, one **cohesive** `EvalRunLogger` facade). Big but single-
+  responsibility, so it is not a blocker. A mixin split is **not** recommended — mixins don't reduce
+  the real coupling (every method needs the facade's `self._local/_mlflow/_otel` state) and add MRO
+  indirection. If trimming: extract the pure report-**writers** (`write_summary_metrics`,
+  `write_eval_report`, `write_metrics_structured`, `write_run_record`) into a `tracking/reports.py`
+  of free functions — low-risk, reduces size *and* coupling.
+- Ray executor: `execution/ray_backend.py` is a `NotImplementedError` skeleton + a heavy `[ray]`
+  extra, now undocumented. Candidate for full removal (backend + extra + `--execution ray` choice +
+  its test) so the package advertises only what runs.
