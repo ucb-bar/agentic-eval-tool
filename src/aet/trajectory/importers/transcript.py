@@ -33,6 +33,7 @@ from aet.trajectory.classify import (
 )
 from aet.trajectory.importers.capsule_bench import _round_events, _split_at_results
 from aet.trajectory.model import RunTrajectory, TestMilestone
+from aet.trajectory.oracle import extract_oracle_progression
 
 
 def _transcript_files(raw: str | Path) -> list[Path]:
@@ -77,6 +78,7 @@ def import_transcript(raw: str | Path, *,
                       pass_bool: bool | None = None,
                       n_passed: int | None = None,
                       n_total: int = 1,
+                      oracle_markers: "list[str] | None" = None,
                       milestone_time: str = "proportional",  # accepted for CLI uniformity; unused
                       **_ignored) -> RunTrajectory:
     """Ingest one or many Claude Code transcripts into a canonical :class:`RunTrajectory`.
@@ -97,8 +99,9 @@ def import_transcript(raw: str | Path, *,
     rid = run_id or label or (Path(raw).stem if Path(raw).is_file() else Path(raw).name)
     traj = RunTrajectory(run_id=rid, source="import:transcript", classifier_config=cfg_dict)
 
-    # Flatten every file into ordered (result, is_terminal_segment) segments, so a directory of
-    # session logs and a single multi-invocation file are the same one code path.
+    # Flatten every file into ordered (result, raw_segment) pairs, so a directory of session logs
+    # and a single multi-invocation file are the same one code path. The raw segment is kept so the
+    # oracle-progression extractor can read the agent's testbench invocations on the same time axis.
     parsed: list = []
     for f in files:
         events = _round_events(f)
@@ -112,18 +115,31 @@ def import_transcript(raw: str | Path, *,
             except Exception:
                 result = parse_stream("\n".join(line for _, line in seg))
             if result.turn_usage:              # skip noise segments with no agent turns
-                parsed.append(result)
+                parsed.append((result, seg))
 
-    for i, result in enumerate(parsed):
+    climb: list[TestMilestone] = []
+    for i, (result, seg) in enumerate(parsed):
+        t0 = traj.duration_s                   # this round starts here on the active-wall axis
         # a single terminal k/N (or boolean) grade is attached as the last round's QA verdict
         verdict = None
         if term_passed is not None and i == len(parsed) - 1:
             verdict = {"n_passed": term_passed, "n_total": term_total}
         append_round(traj, result, classifier=classifier, verdict=verdict)
+        # oracle progression: each testbench invocation in this segment → a milestone at its wall time
+        if oracle_markers is not None:
+            hint = term_total if term_total else (n_total or None)
+            for r in extract_oracle_progression(seg, markers=tuple(oracle_markers),
+                                                n_total_hint=hint):
+                climb.append(TestMilestone(t_s=t0 + r.t_s, n_passed=r.n_passed,
+                                           n_total=r.n_total, scope="public",
+                                           source="oracle_log"))
 
-    # The terminal grade also surfaces as a single end-of-run milestone so tests-over-time views have
-    # something to draw (they otherwise degrade to empty — no intermediate progression exists here).
-    if term_passed is not None and traj.duration_s > 0:
+    if climb:
+        # the mined climb wins (multiple over-time milestones — the real curve)
+        traj.milestones = climb
+    elif term_passed is not None and traj.duration_s > 0:
+        # else the terminal grade surfaces as a single end-of-run milestone so tests-over-time views
+        # still have something to draw (graceful degradation to 'no intermediate progression').
         traj.milestones = [TestMilestone(
             t_s=traj.duration_s, n_passed=term_passed, n_total=term_total,
             scope="all", source="terminal_verdict")]

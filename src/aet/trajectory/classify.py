@@ -138,3 +138,12 @@ def capsule_bench_config(circt: bool = False) -> ActivityConfig:
     if circt:
         rules.append(LongWaitRule("Bash", ["rtl_check", "gen_isa", "rtl_facts", "facts.json"]))
     return ActivityConfig(long_wait_rules=rules)
+
+
+def spec_to_rtl_config() -> ActivityConfig:
+    """abc-testing spec-to-rtl / rtl-to-spec activity rules — a Bash call that runs the Verilator
+    testbench oracle (``./run.sh``, ``run_test.py``, ``verilator``) is a long external wait → the
+    ``tool`` lane, so it reads as the distinct 'tool wait' band (matching the reference figures)."""
+    return ActivityConfig(long_wait_rules=[
+        LongWaitRule("Bash", ["run.sh", "run_test.py", "verilator"], category="tool"),
+    ])
