@@ -75,10 +75,22 @@ def import_transcript(raw: str | Path, *,
                       run_id: str = "",
                       label: str | None = None,
                       pass_bool: bool | None = None,
+                      n_passed: int | None = None,
                       n_total: int = 1,
                       milestone_time: str = "proportional",  # accepted for CLI uniformity; unused
                       **_ignored) -> RunTrajectory:
-    """Ingest one or many Claude Code transcripts into a canonical :class:`RunTrajectory`."""
+    """Ingest one or many Claude Code transcripts into a canonical :class:`RunTrajectory`.
+
+    Terminal verdict: pass ``pass_bool`` for an all-or-nothing boolean grade, or ``n_passed`` +
+    ``n_total`` for a ``k/N`` grade (e.g. abc-testing's ``cases_total`` − failed cases). Either
+    records the last round's QA verdict + a single end-of-run milestone."""
+    # a k/N grade takes precedence over the boolean when both are given
+    if n_passed is not None:
+        term_passed, term_total = int(n_passed), int(n_total)
+    elif pass_bool is not None:
+        term_passed, term_total = (int(n_total) if pass_bool else 0), int(n_total)
+    else:
+        term_passed = term_total = None
     files = _transcript_files(raw)
     classifier, cfg_dict = _resolve_classifier(classifier_config, circt)
 
@@ -103,16 +115,16 @@ def import_transcript(raw: str | Path, *,
                 parsed.append(result)
 
     for i, result in enumerate(parsed):
-        # a single terminal pass/fail is attached as the last round's QA verdict
+        # a single terminal k/N (or boolean) grade is attached as the last round's QA verdict
         verdict = None
-        if pass_bool is not None and i == len(parsed) - 1:
-            verdict = {"n_passed": int(n_total) if pass_bool else 0, "n_total": int(n_total)}
+        if term_passed is not None and i == len(parsed) - 1:
+            verdict = {"n_passed": term_passed, "n_total": term_total}
         append_round(traj, result, classifier=classifier, verdict=verdict)
 
-    # A terminal pass also surfaces as a single end-of-run milestone so tests-over-time views have
+    # The terminal grade also surfaces as a single end-of-run milestone so tests-over-time views have
     # something to draw (they otherwise degrade to empty — no intermediate progression exists here).
-    if pass_bool is not None and traj.duration_s > 0:
+    if term_passed is not None and traj.duration_s > 0:
         traj.milestones = [TestMilestone(
-            t_s=traj.duration_s, n_passed=int(n_total) if pass_bool else 0,
-            n_total=int(n_total), scope="all", source="terminal_verdict")]
+            t_s=traj.duration_s, n_passed=term_passed, n_total=term_total,
+            scope="all", source="terminal_verdict")]
     return traj

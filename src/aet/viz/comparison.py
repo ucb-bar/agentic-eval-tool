@@ -305,10 +305,12 @@ def plot_tests_facets(trajs, labels=None):
     fig.subplots_adjust(left=0.085, right=0.965, top=1 - 1.5 / figh,
                         bottom=0.9 / figh, hspace=0.6)
     xmax = max((t.duration_s / 60.0 for t in trajs), default=1.0)
-    ymax = max((t.tests_total() for t in trajs), default=20)
     for i, (ax, traj, lab, (col, mk, ls)) in enumerate(zip(axes, trajs, labs, styles)):
         S.style_ax(ax)
         xs, ys = traj.tests_steps()
+        # each lane scales to its OWN suite size (arms may have different N: 8 vs 32 vs 182), so a
+        # small suite isn't dwarfed by a large one on a shared y-axis
+        ntot = max(traj.tests_total(), 1)
         ax.fill_between(xs, 0, ys, step="post", color=col, alpha=0.18, zorder=2)
         ax.step(xs, ys, where="post", color=col, lw=5.0, zorder=5, solid_capstyle="round")
         rises = [k for k in range(1, len(ys)) if ys[k] != ys[k - 1]]
@@ -316,8 +318,8 @@ def plot_tests_facets(trajs, labels=None):
                    lw=1.6, zorder=6, marker=mk)
         ax.scatter([xs[-1]], [ys[-1]], s=320, color=col, ec=S.INK, lw=2.2, zorder=7, marker=mk)
         ax.set_xlim(0, xmax * 1.12)
-        ax.set_ylim(0, ymax * 1.09)
-        ax.set_yticks([0, ymax // 2, ymax])
+        ax.set_ylim(0, ntot * 1.09)
+        ax.set_yticks(sorted({0, ntot // 2, ntot}) if ntot > 1 else [0, 1])
         ax.tick_params(labelsize=20)
         ax.set_ylabel("tests", fontsize=24)
         ax.set_title(lab, loc="left", color=col, fontsize=26, fontweight="bold", pad=10)
