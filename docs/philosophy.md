@@ -31,7 +31,7 @@ The same principle applies to optional Python dependencies. `aet` has no require
 ## What aet Is Not
 
 - Not a training framework.
-- Not a job scheduler (Ray integration is planned but not yet active).
+- Not a job scheduler.
 - Not a dashboard (SigNoz is an optional viewer, not a dependency).
 - Not a replacement for your project's own test suite.
 

@@ -27,31 +27,10 @@ class LocalExecutor(ExecutionBackend):
         return [fn(spec) for spec in specs]
 ```
 
-## RayExecutor (skeleton)
-
-The Ray backend is a skeleton. It is not yet implemented. Any call to `submit` or `run_many` raises `NotImplementedError`.
-
-```
-aet run-suite --suite targetgen --methods agent_v1 --seeds 1,2,3 --execution ray
-# raises: NotImplementedError — use --execution local
-```
-
-Attempting to use `--execution ray` with `run-suite` will also raise `NotImplementedError` at the CLI level, before any run is started.
-
-To install the Ray extra (for future use):
-
-```
-pip install 'aet[ray]'
-```
-
-The `RayExecutor` class will import `ray` at construction time and raise `AetError` if it is not installed, rather than at call time.
-
-See `docs/ray_backend.md` for the planned interface.
-
 ## CLI Flag Reference
 
 | Flag | Values | Default | Applies to |
 |------|--------|---------|------------|
-| `--execution` | `local`, `ray` | `local` | `init-run`, `validate`, `run-suite` |
+| `--execution` | `local` | `local` | `init-run`, `validate`, `run-suite` |
 
-Use `--execution local` for all current work.
+The local executor is the only implemented backend.

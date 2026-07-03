@@ -45,7 +45,6 @@ nav:
     - GenAI semconv: genai_semconv.md
     - SigNoz (optional): signoz_optional.md
     - Execution backends: execution_backends.md
-    - Ray backend: ray_backend.md
   - Bundled suite (targetgen):
     - Overview: targetgen_suite.md
     - Metrics: targetgen_metrics.md

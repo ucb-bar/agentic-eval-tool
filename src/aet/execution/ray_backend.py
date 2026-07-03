@@ -19,12 +19,10 @@ class RayExecutor(ExecutionBackend):
 
     def submit(self, spec: RunSpec, fn: Callable) -> Any:
         raise NotImplementedError(
-            "Ray execution backend is not yet implemented. Use --execution local.\n"
-            "See docs/ray_backend.md for the planned interface."
+            "Ray execution backend is not implemented. Use --execution local."
         )
 
     def run_many(self, specs: list[RunSpec], fn: Callable) -> list[Any]:
         raise NotImplementedError(
-            "Ray execution backend is not yet implemented. Use --execution local.\n"
-            "See docs/ray_backend.md for the planned interface."
+            "Ray execution backend is not implemented. Use --execution local."
         )
