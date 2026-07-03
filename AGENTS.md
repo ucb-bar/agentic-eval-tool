@@ -65,6 +65,3 @@ Data flow: `transcript.jsonl → import_transcript → RunTrajectory → (emit_t
   indirection. If trimming: extract the pure report-**writers** (`write_summary_metrics`,
   `write_eval_report`, `write_metrics_structured`, `write_run_record`) into a `tracking/reports.py`
   of free functions — low-risk, reduces size *and* coupling.
-- Ray executor: `execution/ray_backend.py` is a `NotImplementedError` skeleton + a heavy `[ray]`
-  extra, now undocumented. Candidate for full removal (backend + extra + `--execution ray` choice +
-  its test) so the package advertises only what runs.

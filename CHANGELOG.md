@@ -102,6 +102,11 @@ All notable changes to `aet` are recorded here.
   score <baseline−0.05.
 - **`aet runs`** and **`aet show`** CLI subcommands for listing and inspecting recorded runs.
 
+### Removed
+- **Ray execution backend** — it was a `NotImplementedError` skeleton advertising a feature that
+  didn't run. Removed the backend, the `[ray]` extra, the `--execution ray` choice, and its docs/test.
+  Only the local executor ships (ship only what's real).
+
 ### Changed
 - **Lint-clean + enforced**: repo is `ruff`-clean; `[tool.ruff]`/`[tool.pytest.ini_options]` pinned in
   `pyproject.toml`; the `all` extra now composes the other extras (single source of truth) + a new

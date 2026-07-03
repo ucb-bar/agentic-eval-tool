@@ -188,12 +188,6 @@ def _cmd_validate(args) -> None:
 
 
 def _cmd_run_suite(args) -> None:
-    if args.execution == "ray":
-        raise NotImplementedError(
-            "Ray execution backend is not yet implemented. "
-            "Use --execution local to run locally."
-        )
-
     methods = [m.strip() for m in args.methods.split(",")]
     seeds = [int(s.strip()) for s in args.seeds.split(",")]
     combos = [(method, seed) for method in methods for seed in seeds]

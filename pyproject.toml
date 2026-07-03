@@ -22,12 +22,11 @@ openllmetry = [
     "opentelemetry-instrumentation-anthropic>=0.55",
     "opentelemetry-instrumentation-openai>=0.55",
 ]
-ray    = ["ray[default]>=2.40"]
 viz    = ["matplotlib>=3.7", "numpy>=1.24"]
 docs   = ["mkdocs>=1.6", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26"]
 dev    = ["pytest>=8.0", "ruff", "jsonschema>=4.0"]
 # `all` composes the other extras (single source of truth — no hand-duplicated pins).
-all    = ["aet[tracking,openllmetry,ray,viz,docs,dev]"]
+all    = ["aet[tracking,openllmetry,viz,docs,dev]"]
 
 [project.scripts]
 aet = "aet.cli.main:main"

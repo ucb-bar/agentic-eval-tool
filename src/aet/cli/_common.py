@@ -16,7 +16,7 @@ def _add_global_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument(
         "--execution",
-        choices=["local", "ray"],
+        choices=["local"],
         default="local",
         help="Execution backend (default: local)",
     )
