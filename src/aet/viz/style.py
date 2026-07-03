@@ -39,7 +39,7 @@ SHADOW = pe.withSimplePatchShadow(offset=(3.0, -3.0),
                                   shadow_rgbFace=(0.18, 0.178, 0.173), alpha=0.26, rho=1.0)
 
 
-def use_merlin_style() -> None:
+def use_house_style() -> None:
     """Register the house fonts and apply the rcParams. Safe to call repeatedly."""
     for fp in (glob.glob("/usr/share/fonts/opentype/inter/Inter-*.otf")
                + glob.glob("/usr/share/fonts/opentype/inter/InterDisplay-*.otf")
@@ -59,6 +59,11 @@ def use_merlin_style() -> None:
         "legend.facecolor": "white", "legend.edgecolor": "#d9cfc0",
         "svg.fonttype": "none",
     })
+
+
+# Deprecated alias (the style used to be named after the originating project). Kept so external
+# callers don't break; prefer ``use_house_style``.
+use_merlin_style = use_house_style
 
 
 def style_ax(ax, *, grid="y") -> None:

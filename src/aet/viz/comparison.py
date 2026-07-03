@@ -231,7 +231,7 @@ def plot_rate_panels(trajs, labels=None, *, independent_scales=True, scale_bar_m
 
     ``scale_bar_minutes`` defaults to an auto-picked 'nice' length that fits the shortest run (so it
     works for minute-scale sweeps *and* hour-scale runs); pass a number to force it, or 0 to omit."""
-    S.use_merlin_style()
+    S.use_house_style()
     trajs = [t for t in trajs if t is not None]
     labs = _labels_for(trajs, labels)
     n = max(1, len(trajs))
@@ -260,7 +260,7 @@ def plot_rate_panels(trajs, labels=None, *, independent_scales=True, scale_bar_m
 
 def plot_cost_vs_time(trajs, labels=None):
     """Single axes: one cumulative-spend line per arm + endpoint ``$X · YM tok`` label."""
-    S.use_merlin_style()
+    S.use_house_style()
     trajs = [t for t in trajs if t is not None]
     labs = _labels_for(trajs, labels)
     styles = S.series_styles(len(trajs))
@@ -294,7 +294,7 @@ def plot_cost_vs_time(trajs, labels=None):
 
 def plot_tests_facets(trajs, labels=None):
     """Small multiples: one tests-passing step-lane per arm, shared time axis, zero overlap."""
-    S.use_merlin_style()
+    S.use_house_style()
     trajs = [t for t in trajs if t is not None]
     labs = _labels_for(trajs, labels)
     styles = S.series_styles(len(trajs))

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
-import sys
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from aet.tracking.types import TrackingConfig
+
+# Library diagnostics go through logging (silent by default; apps opt in with logging.basicConfig).
+# The warning is ALSO persisted to logs/tracking_warnings.jsonl for the run record.
+log = logging.getLogger("aet.tracking")
 
 
 def _now() -> str:
@@ -39,7 +43,7 @@ class LocalBackend:
 
     # ------------------------------------------------------------------
     def warn(self, message: str) -> None:
-        print(f"[tracking warning] {message}", file=sys.stderr)
+        log.warning(message)
         _append_jsonl(self._warnings_path, {"ts": _now(), "message": message})
 
     # ------------------------------------------------------------------

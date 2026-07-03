@@ -56,7 +56,7 @@ def plot_trajectory(traj: RunTrajectory, *, ax=None, log_tokens: bool = True,
                     show_spend: bool = True, show_milestones: bool = True,
                     show_activity: bool = True, fs: float = 1.0):
     """Render one run's trajectory; returns the Figure."""
-    S.use_merlin_style()
+    S.use_house_style()
     if ax is None:
         fig, ax = plt.subplots(figsize=(13, 4.2))
     else:
@@ -115,7 +115,7 @@ def plot_trajectory(traj: RunTrajectory, *, ax=None, log_tokens: bool = True,
 
 def plot_comparison(trajs: list[RunTrajectory], *, labels=None, **kw):
     """Stack several runs on aligned panels; returns the Figure."""
-    S.use_merlin_style()
+    S.use_house_style()
     trajs = [t for t in trajs if t is not None]
     n = max(1, len(trajs))
     fig, axes = plt.subplots(n, 1, figsize=(13, 3.4 * n), squeeze=False)
