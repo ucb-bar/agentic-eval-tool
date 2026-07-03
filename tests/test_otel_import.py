@@ -89,6 +89,17 @@ class TestOtelActivity:
         for (a0, a1), (b0, b1) in zip(segs, segs[1:]):
             assert b0 >= a1 - 1e-9, "bands must not overlap"
 
+    def test_bands_cover_wall_gaplessly(self):
+        # NO empty space: the bands must tile [0, duration] with zero gap and zero overlap
+        _, bands, _, dur, _ = build_from_otel_events(_events())
+        segs = sorted((b.t0_s, b.t1_s) for b in bands)
+        assert abs(segs[0][0]) < 1e-9, "first band starts at 0"
+        assert abs(segs[-1][1] - dur) < 1e-9, "last band ends at duration"
+        for (a0, a1), (b0, b1) in zip(segs, segs[1:]):
+            assert abs(b0 - a1) < 1e-9, f"gap/overlap between bands at {a1}..{b0}"
+        covered = sum(b1 - b0 for b0, b1 in segs)
+        assert abs(covered - dur) < 1e-9, "bands cover 100% of wall"
+
     def test_bands_reproduce_breakdown(self):
         # each category's total BAND time equals the ground-truth breakdown (durations preserved)
         _, bands, _, _, _ = build_from_otel_events(_events())
