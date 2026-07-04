@@ -34,6 +34,13 @@ def _cmd_import(args) -> None:
         pb = getattr(args, "pass_bool", None)
         if pb is not None:
             kwargs["pass_bool"] = pb
+    # the full-fidelity OTel importer records a terminal verdict as n_passed / n_total
+    elif args.source == "otel":
+        n_total = getattr(args, "n_total", 1)
+        kwargs["n_total"] = n_total
+        pb = getattr(args, "pass_bool", None)
+        if pb is not None:
+            kwargs["n_passed"] = n_total if pb else 0
 
     traj = importer(args.raw, **kwargs)
 
@@ -53,6 +60,12 @@ def _cmd_import(args) -> None:
         from aet.trajectory.recording import materialize_run
         run_path = materialize_run(traj, Path(args.into))
         print(f"[aet] materialized aet run at {run_path}")
+
+
+def _cmd_otel_sink(args) -> None:
+    """Run the minimal OTLP/HTTP receiver that captures Claude Code telemetry to a JSONL file."""
+    from aet.tracking.otel_sink import serve
+    serve(args.port, args.out, host=getattr(args, "host", "127.0.0.1"))
 
 
 def _cmd_plot(args) -> None:

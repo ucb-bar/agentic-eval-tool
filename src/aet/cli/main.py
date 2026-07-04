@@ -15,6 +15,7 @@ from aet.cli.commands.reporting import (
 )
 from aet.cli.commands.trajectory import (
     _SESSION_KINDS, _cmd_import, _cmd_plot, _cmd_plot_sessions, _cmd_run, _cmd_monitor,
+    _cmd_otel_sink,
 )
 
 
@@ -229,11 +230,14 @@ def main() -> None:
         help="Import an existing agentic run into a canonical trajectory",
     )
     p_import.add_argument("--source", default="capsule-bench", metavar="SOURCE",
-                          help="Run layout to import (default: capsule-bench; also 'transcript', the "
-                               "generic one-or-many Claude Code *.jsonl importer for any project).")
+                          help="Run layout to import. 'transcript' = generic Claude Code stream-json "
+                               "*.jsonl (any project); 'otel' = full-fidelity OTLP capture "
+                               "(otel_logs.jsonl from `aet otel-sink` — real per-turn tokens/cost/"
+                               "duration + cache); 'capsule-bench' = the bundled suite layout "
+                               "(default).")
     p_import.add_argument("--raw", required=True, metavar="DIR_OR_FILE",
-                          help="Path to the existing run directory (or a single transcript file "
-                               "for --source transcript)")
+                          help="Path to the existing run directory, a single transcript file "
+                               "(--source transcript), or an otel_logs.jsonl (--source otel)")
     p_import.add_argument("--label", default=None,
                           help="[transcript] Human label for the arm (defaults to the file/dir name)")
     p_import.add_argument("--n-total", dest="n_total", type=int, default=1,
@@ -258,6 +262,20 @@ def main() -> None:
     p_import.add_argument("--into", metavar="AET_RUN_DIR", default=None,
                           help="Also materialize a canonical aet run dir (logs/ + trajectory.json)")
     p_import.set_defaults(func=_cmd_import)
+
+    # ------------------------------------------------------------------
+    # otel-sink — capture Claude Code telemetry (OTLP/HTTP JSON) to a JSONL file
+    # ------------------------------------------------------------------
+    p_otel = subparsers.add_parser(
+        "otel-sink",
+        help="Run a minimal OTLP receiver that captures Claude Code telemetry to otel_logs.jsonl "
+             "(then import with `aet import --source otel`).",
+    )
+    p_otel.add_argument("--port", type=int, required=True, help="TCP port to listen on")
+    p_otel.add_argument("--out", required=True, metavar="JSONL",
+                        help="Output path — one line per received OTLP envelope")
+    p_otel.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
+    p_otel.set_defaults(func=_cmd_otel_sink)
 
     # ------------------------------------------------------------------
     # plot — render a run's trajectory (requires the [viz] extra)

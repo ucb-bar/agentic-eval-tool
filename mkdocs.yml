@@ -34,6 +34,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Guides:
+    - Instrument & plot: instrumentation.md
     - Trajectories: trajectory.md
     - Architecture: ARCHITECTURE.md
     - Isolation & sandboxing: isolation.md

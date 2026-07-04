@@ -9,6 +9,8 @@ agents in a [deny-by-default sandbox](isolation.md), survives the Claude 5-hour 
 unattended, and drives structured evaluation suites.
 
 ## Start here
+- **[Instrument & plot](instrumentation.md)** — capture a Claude Code run (full-fidelity OTel or
+  transcript-only) and render the figures, using only the installed package.
 - **[Trajectories](trajectory.md)** — record an agentic run and plot it.
 - **[Architecture](ARCHITECTURE.md)** — the one-spine design.
 - **[Isolation](isolation.md)** — the bwrap sandbox for untrusted agent runs.

@@ -7,11 +7,16 @@ from __future__ import annotations
 
 from aet.core.errors import AetError
 from aet.trajectory.importers.capsule_bench import import_run as _import_capsule_bench
+from aet.trajectory.importers.otel import import_otel as _import_otel
 from aet.trajectory.importers.transcript import import_transcript as _import_transcript
 
 IMPORTER_REGISTRY = {
     "capsule-bench": _import_capsule_bench,
     "transcript": _import_transcript,
+    # full-fidelity: an OTLP logs capture (otel_logs.jsonl from `aet otel-sink`) → real per-turn
+    # tokens/cost/duration + cache, no interpolation. Tolerates the generic import kwargs it does
+    # not use (classifier_config/circt/milestone_time) via **_ignored in its signature.
+    "otel": _import_otel,
 }
 
 
