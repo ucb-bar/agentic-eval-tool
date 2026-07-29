@@ -347,6 +347,24 @@ def main() -> None:
                        help="Paths masked even if under an --allow (answers / sibling runs)")
     p_run.add_argument("--extra-binds", dest="extra_binds", nargs="+", metavar="PATH", default=None,
                        help="Toolchain dirs outside the repo to bind read-only")
+    # The three below complete the pass-through: SandboxSpec has supported them since it was written,
+    # but `aet run` had no way to reach them, so a caller needing any one of them had to rebuild the
+    # bwrap policy itself. Each covers a case that `--allow`/`--deny` provably cannot:
+    #   --rw-binds    an agent CLI keeps session state and a config file under $HOME; read-only there
+    #                 means it cannot authenticate at all.
+    #   --mask-files  withholding a single FILE inside an otherwise-granted directory. `--deny` tmpfs's
+    #                 a directory, so it is all-or-nothing for a docs tree with one answer key in it.
+    #   --unsetenv    a nested agent session inherits variables that re-route it into the PARENT's
+    #                 session, silently joining the run it was meant to be isolated from.
+    p_run.add_argument("--rw-binds", dest="rw_binds", nargs="+", metavar="PATH", default=None,
+                       help="Read-WRITE binds outside the workspace (an agent CLI's state dir and "
+                            "config file under an otherwise read-only home)")
+    p_run.add_argument("--mask-files", dest="mask_files", nargs="+", metavar="PATH", default=None,
+                       help="Individual files overlaid with /dev/null — present but empty, so "
+                            "withholding is not inferable from an ENOENT (per-file answer keys)")
+    p_run.add_argument("--unsetenv", dest="unsetenv", nargs="+", metavar="VAR", default=None,
+                       help="Environment variables cleared inside the sandbox (nested-session "
+                            "variables that would re-route a child agent into this session)")
     p_run.add_argument("--env-prefix", dest="env_prefix", default="",
                        help="Shell export prefix for the toolchain (PATH/LD_LIBRARY_PATH/...)")
     p_run.add_argument("--allow-unsandboxed", dest="allow_unsandboxed", action="store_true",

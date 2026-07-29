@@ -138,3 +138,77 @@ def test_unsandboxed_real_agent_refused(tmp_path):
     import pytest
     with pytest.raises(ValueError, match="refusing to run unsandboxed"):
         run_agent("t", tmp_path / "ws", sandbox="none")   # no agent_cmd, no allow_unsandboxed
+
+
+def test_run_agent_passes_the_full_sandbox_policy_through(tmp_path, monkeypatch):
+    """``SandboxSpec`` has supported ``rw_binds``, ``mask_files`` and ``unsetenv`` since it was written,
+    but ``run_agent`` built its spec from ``allow``/``deny``/``extra_binds`` only — so a caller needing
+    any of the three had to rebuild the whole bwrap policy itself, which is how a second bwrap builder
+    comes to exist in the world.
+
+    Each of the three covers a case ``--allow``/``--deny`` provably cannot:
+
+    * ``rw_binds`` — an agent CLI keeps session state *and* a config file under ``$HOME``. Read-only
+      there means it cannot authenticate at all: it starts, warns, and runs unconfigured.
+    * ``mask_files`` — withholding one FILE inside an otherwise-granted directory. ``deny`` tmpfs's a
+      directory, so a docs tree with a single answer key in it is all-or-nothing.
+    * ``unsetenv`` — a nested agent session inherits variables that re-route it into the *parent's*
+      session, silently joining the run it was meant to be isolated from.
+    """
+    import aet.runner as runner_mod
+
+    ws = tmp_path / "ws"
+    home = tmp_path / "home"
+    (home / ".agent").mkdir(parents=True)
+    (home / ".agent.json").write_text("{}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    answers = docs / "ANSWERS.md"
+    answers.write_text("the answer key")
+
+    seen = {}
+
+    def _capture(command, transcript_path, on_line=None):
+        seen["command"] = command
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        transcript_path.write_text("")
+        return 0
+
+    monkeypatch.setattr(runner_mod, "_stream_invocation", _capture)
+
+    run_agent("task text", ws, into=tmp_path / "run", label="pt",
+              sandbox="bwrap", allow=[docs],
+              rw_binds=[home / ".agent", home / ".agent.json"],
+              mask_files=[answers],
+              unsetenv=["AGENT_SSE_PORT", "AGENTCODE"],
+              agent_cmd="true")
+
+    cmd = seen["command"]
+    assert f"--bind {home / '.agent'} {home / '.agent'}" in cmd
+    assert f"--bind {home / '.agent.json'} {home / '.agent.json'}" in cmd
+    assert f"--ro-bind /dev/null {answers}" in cmd
+    assert "--unsetenv AGENT_SSE_PORT" in cmd and "--unsetenv AGENTCODE" in cmd
+    # A masked file must be overlaid AFTER its directory is granted, or the allow would win.
+    assert cmd.index(f"--ro-bind {docs} {docs}") < cmd.index(f"--ro-bind /dev/null {answers}")
+
+
+def test_a_masked_file_is_bound_read_only_and_its_directory_is_not_tmpfsd(tmp_path, monkeypatch):
+    """The property that makes per-file masking worth having: the rest of the directory still reads.
+    A ``deny`` on the parent would take the sibling documents with it."""
+    import aet.runner as runner_mod
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "PUBLIC.md").write_text("readable")
+    secret = docs / "SECRET.md"
+    secret.write_text("withheld")
+
+    seen = {}
+    monkeypatch.setattr(runner_mod, "_stream_invocation",
+                        lambda c, t, on_line=None: (seen.__setitem__("c", c),
+                                                    t.parent.mkdir(parents=True, exist_ok=True),
+                                                    t.write_text(""), 0)[-1])
+    run_agent("t", tmp_path / "ws", into=tmp_path / "run", sandbox="bwrap",
+              allow=[docs], mask_files=[secret], agent_cmd="true")
+    assert f"--tmpfs {docs}" not in seen["c"]
+    assert f"--ro-bind /dev/null {secret}" in seen["c"]
