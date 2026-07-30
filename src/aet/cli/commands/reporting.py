@@ -264,6 +264,61 @@ def _cmd_runs(args) -> None:
 
 
 
+def _cmd_spend(args) -> None:
+    """Cross-experiment spend rollup over one or more run roots (table or --json)."""
+    import json
+    import sys as _sys
+
+    from aet.trajectory.rollup import rollup_runs
+
+    roots = [Path(r) for r in args.roots]
+    missing = [str(r) for r in roots if not r.exists()]
+    if missing:
+        print(f"[aet] Error: run root(s) not found: {', '.join(missing)}", file=_sys.stderr)
+        _sys.exit(1)
+
+    roll = rollup_runs(roots, budget_usd=args.budget_usd)
+
+    if getattr(args, "json", False):
+        print(json.dumps(roll.to_dict(), indent=2))
+    else:
+        _print_spend_table(roll)
+
+    # Non-zero exit when a hard budget ceiling is exceeded (enforceable in CI / scripts).
+    if roll.over_budget:
+        print(f"[aet] OVER BUDGET: ${roll.total_cost_usd:.4f} > ${roll.budget_usd:.2f}",
+              file=_sys.stderr)
+        _sys.exit(2)
+
+
+def _print_spend_table(roll) -> None:
+    tok = roll.tokens
+    print(f"\n  Spend rollup — {roll.n_runs} run(s)")
+    print("  " + "─" * 58)
+    print(f"    total cost           ${roll.total_cost_usd:>12.4f}")
+    if roll.unpriced_runs:
+        print(f"    unpriced runs        {roll.unpriced_runs:>13}  (cost unavailable — not $0)")
+    print(f"    tokens  in/out       {tok.input:>13,} / {tok.output:,}")
+    print(f"    tokens  cache        {tok.cache_total:>13,}  "
+          f"(read {tok.cache_read:,} / create {tok.cache_creation:,})")
+
+    if roll.per_model:
+        print("\n    per-model")
+        name_w = max(len(m) for m in roll.per_model)
+        for model, ms in sorted(roll.per_model.items(),
+                                key=lambda kv: kv[1].cost_usd, reverse=True):
+            unp = ms.n_runs - ms.n_priced_runs
+            unp_s = f"  ({unp} unpriced)" if unp else ""
+            print(f"      {model:<{name_w}}  ${ms.cost_usd:>10.4f}  "
+                  f"{ms.n_runs:>3} run(s)  {ms.tokens.total:>12,} tok{unp_s}")
+
+    if roll.budget_usd is not None:
+        state = "OVER BUDGET" if roll.over_budget else "within budget"
+        print(f"\n    budget               ${roll.budget_usd:>12.2f}")
+        print(f"    headroom             ${roll.headroom_usd:>12.4f}  ({state})")
+    print()
+
+
 def _cmd_show(args) -> None:
     import json
 

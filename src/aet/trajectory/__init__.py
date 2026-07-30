@@ -22,6 +22,13 @@ from aet.trajectory.classify import (
     DEFAULT_WEIGHTS,
 )
 from aet.trajectory.pricing import PriceTable
+from aet.trajectory.rollup import (
+    SpendRollup,
+    RunSpend,
+    rollup_runs,
+    read_run_spend,
+    discover_run_dirs,
+)
 
 __all__ = [
     "RunTrajectory",
@@ -36,4 +43,9 @@ __all__ = [
     "capsule_bench_config",
     "DEFAULT_WEIGHTS",
     "PriceTable",
+    "SpendRollup",
+    "RunSpend",
+    "rollup_runs",
+    "read_run_spend",
+    "discover_run_dirs",
 ]

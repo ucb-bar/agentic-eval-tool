@@ -12,6 +12,7 @@ from aet.cli.commands.lifecycle import (
 )
 from aet.cli.commands.reporting import (
     _cmd_compare, _cmd_baseline_set, _cmd_baseline_show, _cmd_baseline, _cmd_runs, _cmd_show,
+    _cmd_spend,
 )
 from aet.cli.commands.trajectory import (
     _SESSION_KINDS, _cmd_import, _cmd_plot, _cmd_plot_sessions, _cmd_run, _cmd_monitor,
@@ -197,6 +198,23 @@ def main() -> None:
     )
     _add_global_args(p_runs)
     p_runs.set_defaults(func=_cmd_runs)
+
+    # ------------------------------------------------------------------
+    # spend — cross-experiment spend rollup over one or more run roots
+    # ------------------------------------------------------------------
+    p_spend = subparsers.add_parser(
+        "spend",
+        help="Aggregate token/cost spend across one or more run roots (enforce a budget ceiling)",
+    )
+    p_spend.add_argument("roots", nargs="+", metavar="RUN_ROOT",
+                         help="Run directories or roots that contain them (e.g. a runs/ tree)")
+    p_spend.add_argument("--json", action="store_true", default=False,
+                         help="Emit the rollup as JSON instead of a table")
+    p_spend.add_argument("--budget-usd", dest="budget_usd", type=float, default=None,
+                         metavar="N",
+                         help="Hard budget ceiling: print headroom and exit non-zero if total "
+                              "spend across all roots exceeds N")
+    p_spend.set_defaults(func=_cmd_spend)
 
     # ------------------------------------------------------------------
     # baseline
