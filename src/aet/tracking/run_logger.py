@@ -324,6 +324,40 @@ class EvalRunLogger:
                 model=model, provider=provider,
             )
 
+    def log_model_usage(self, model_usage) -> None:
+        """Record per-model token/cost breakdown from one or more ``ModelUsage`` records.
+
+        Accepts a single :class:`~aet.tracking.claude_stream.ModelUsage` or a list of them;
+        ``None`` is a no-op. Writes the ``per_model.<model>.*`` metrics the aet readers and the
+        deep-trace example already expect (so existing tooling keeps working) plus a structured
+        ``gen_ai.model.usage`` event, fanning out to every configured backend.
+        """
+        if model_usage is None:
+            return
+        items = model_usage if isinstance(model_usage, (list, tuple)) else [model_usage]
+        for mu in items:
+            if mu is None:
+                continue
+            safe = mu.model.replace("-", "_").replace(".", "_")
+            total_billed = (mu.input_tokens + mu.cache_read_input_tokens
+                            + mu.cache_creation_input_tokens + mu.output_tokens)
+            self.log_metric(f"per_model.{safe}.cost_usd", mu.cost_usd)
+            self.log_metric(f"per_model.{safe}.input_tokens_raw", mu.input_tokens)
+            self.log_metric(f"per_model.{safe}.output_tokens", mu.output_tokens)
+            self.log_metric(f"per_model.{safe}.cache_read_tokens", mu.cache_read_input_tokens)
+            self.log_metric(f"per_model.{safe}.cache_creation_tokens", mu.cache_creation_input_tokens)
+            self.log_metric(f"per_model.{safe}.total_billed_tokens", total_billed)
+            self.log_event("gen_ai.model.usage", {
+                "model": mu.model,
+                "input_tokens_raw": mu.input_tokens,
+                "output_tokens": mu.output_tokens,
+                "cache_read_tokens": mu.cache_read_input_tokens,
+                "cache_creation_tokens": mu.cache_creation_input_tokens,
+                "total_billed_tokens": total_billed,
+                "cost_usd": mu.cost_usd,
+                "web_search_requests": mu.web_search_requests,
+            })
+
     def log_ttft(self, ttft_s: float, provider: str = "anthropic", model: str = "") -> None:
         """Record time-to-first-chunk (streaming latency) as metric + span attribute + histogram."""
         self._local.log_metric("gen_ai.response.time_to_first_chunk", ttft_s)
