@@ -54,7 +54,7 @@ def _coarse_bands(ax, traj, alpha=0.28, ngrid=240, win=35):
 
 def plot_trajectory(traj: RunTrajectory, *, ax=None, log_tokens: bool = True,
                     show_spend: bool = True, show_milestones: bool = True,
-                    show_activity: bool = True, fs: float = 1.0):
+                    show_activity: bool = True, split_cache: bool = False, fs: float = 1.0):
     """Render one run's trajectory; returns the Figure."""
     S.use_house_style()
     if ax is None:
@@ -73,8 +73,14 @@ def plot_trajectory(traj: RunTrajectory, *, ax=None, log_tokens: bool = True,
     if t:
         ax.plot(t, s["output"], color=S.L_OUTPUT, lw=2.4, label="output tokens", zorder=5)
         ax.plot(t, s["input"], color=S.L_INPUT, lw=2.0, label="input tokens", zorder=5)
-        ax.plot(t, s["cache"], color=S.L_CACHE, lw=1.6, ls=(0, (5, 2)),
-                label="cache tokens", zorder=4)
+        if split_cache:
+            ax.plot(t, s["cache_read"], color=S.L_CACHE, lw=1.6, ls=(0, (5, 2)),
+                    label="cache read", zorder=4)
+            ax.plot(t, s["cache_creation"], color=S.MAUVE, lw=1.6, ls=(0, (1, 1.5)),
+                    label="cache creation", zorder=4)
+        else:
+            ax.plot(t, s["cache"], color=S.L_CACHE, lw=1.6, ls=(0, (5, 2)),
+                    label="cache tokens", zorder=4)
         ax.plot(t, s["total"], color=S.L_TOTAL, lw=1.4, ls=":", label="total tokens", zorder=4)
     if log_tokens:
         ax.set_yscale("log")

@@ -88,6 +88,54 @@ def test_two_rounds_concatenate_on_one_axis():
         assert all(vals[i] >= vals[i - 1] for i in range(1, len(vals)))
 
 
+def test_cache_read_and_creation_series_are_kept_separate(tmp_path):
+    # round 1: turn m1 has 200 creation + 50 read; turn m2 has 0 creation + 300 read
+    #   → cum creation 200, cum read 350, cum cache 550
+    # round 2 (same shape) doubles each: creation 400, read 700, cache 1100
+    traj = RunTrajectory(run_id="c", source="test")
+    clf = ActivityClassifier(capsule_bench_config())
+    append_round(traj, _parse(_round_events(session="s1", t0=0.0, cost=0.02)), classifier=clf)
+    append_round(traj, _parse(_round_events(session="s2", t0=9999.0, cost=0.03)), classifier=clf)
+
+    s = traj.token_series()
+    assert s["cache_read"][-1] == 700.0
+    assert s["cache_creation"][-1] == 400.0
+    # combined curve stays the exact sum of the two (back-compat)
+    assert s["cache"][-1] == 1100.0
+    assert all(abs(r + w - c) < 1e-9
+               for r, w, c in zip(s["cache_read"], s["cache_creation"], s["cache"]))
+    # both series are non-decreasing
+    for key in ("cache_read", "cache_creation", "cache"):
+        vals = s[key]
+        assert all(vals[i] >= vals[i - 1] for i in range(1, len(vals)))
+    assert traj.final_cache_read_tokens == 700
+    assert traj.final_cache_creation_tokens == 400
+    assert traj.final_cache_tokens == 1100
+
+    # round-trips through JSON, and the split survives
+    back = RunTrajectory.from_json(traj.to_json(tmp_path / "metrics" / "trajectory.json"))
+    assert back.to_dict() == traj.to_dict()
+    bs = back.token_series()
+    assert bs["cache_read"][-1] == 700.0 and bs["cache_creation"][-1] == 400.0
+
+
+def test_old_trajectory_json_without_cache_split_loads(tmp_path):
+    # a pre-split trajectory.json only carries cum_cache_tokens; new fields default to 0
+    old = {
+        "schema_version": "1.0", "run_id": "old", "final_cache_tokens": 300,
+        "points": [{"t_s": 0.0, "cum_input_tokens": 10, "cum_output_tokens": 5,
+                    "cum_cache_tokens": 300, "cum_cost_usd": 0.1, "round_index": 0}],
+    }
+    import json as _json
+    p = tmp_path / "trajectory.json"
+    p.write_text(_json.dumps(old))
+    traj = RunTrajectory.from_json(p)
+    s = traj.token_series()
+    assert s["cache"] == [300.0]              # combined value preserved
+    assert s["cache_read"] == [0.0] and s["cache_creation"] == [0.0]
+    assert traj.final_cache_tokens == 300
+
+
 def test_missing_cost_is_provisional():
     traj = RunTrajectory()
     clf = ActivityClassifier(capsule_bench_config())

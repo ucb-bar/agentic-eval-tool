@@ -78,7 +78,8 @@ def append_round(traj: RunTrajectory, result: ClaudeStreamResult, *,
     t0 = traj.duration_s
     base_in = traj.final_input_tokens
     base_out = traj.final_output_tokens
-    base_cache = traj.final_cache_tokens
+    base_cache_read = traj.final_cache_read_tokens
+    base_cache_creation = traj.final_cache_creation_tokens
     base_cost = traj.final_cost_usd
 
     turns = sorted(result.turn_usage, key=lambda t: (t.start_offset_s, t.turn))
@@ -95,22 +96,28 @@ def append_round(traj: RunTrajectory, result: ClaudeStreamResult, *,
     provisional = billed <= 0.0
     round_cost_total = billed if not provisional else sum(shapes)
 
-    acc_in = acc_out = acc_cache = acc_shape = 0.0
+    acc_in = acc_out = acc_cache_read = acc_cache_creation = acc_shape = 0.0
     for i, t in enumerate(turns):
         acc_in += t.input_tokens
         acc_out += t.output_tokens
-        acc_cache += t.cache_read_input_tokens + t.cache_creation_input_tokens
+        acc_cache_read += t.cache_read_input_tokens
+        acc_cache_creation += t.cache_creation_input_tokens
         acc_shape += shapes[i]
         cum_cost = base_cost + round_cost_total * (acc_shape / ssum)
+        cum_cache_read = base_cache_read + acc_cache_read
+        cum_cache_creation = base_cache_creation + acc_cache_creation
         traj.points.append(TrajectoryPoint(
             t_s=t0 + t.start_offset_s,
             cum_input_tokens=base_in + acc_in,
             cum_output_tokens=base_out + acc_out,
-            cum_cache_tokens=base_cache + acc_cache,
+            cum_cache_read_tokens=cum_cache_read,
+            cum_cache_creation_tokens=cum_cache_creation,
+            cum_cache_tokens=cum_cache_read + cum_cache_creation,
             cum_cost_usd=round(cum_cost, 6),
             round_index=ri,
             provisional_cost=provisional,
         ))
+    acc_cache = acc_cache_read + acc_cache_creation
 
     traj.bands.extend(bands_from_result(
         result, classifier, t_offset_s=t0, round_index=ri, round_duration_s=round_dur))
@@ -129,7 +136,9 @@ def append_round(traj: RunTrajectory, result: ClaudeStreamResult, *,
     # advance running totals / axis
     traj.final_input_tokens = int(base_in + acc_in)
     traj.final_output_tokens = int(base_out + acc_out)
-    traj.final_cache_tokens = int(base_cache + acc_cache)
+    traj.final_cache_read_tokens = int(base_cache_read + acc_cache_read)
+    traj.final_cache_creation_tokens = int(base_cache_creation + acc_cache_creation)
+    traj.final_cache_tokens = int(traj.final_cache_read_tokens + traj.final_cache_creation_tokens)
     traj.final_cost_usd = round(base_cost + round_cost_total, 6)
     traj.duration_s = t0 + round_dur
     traj.num_rounds = max(traj.num_rounds, ri + 1)

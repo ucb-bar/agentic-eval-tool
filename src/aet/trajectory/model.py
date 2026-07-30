@@ -32,6 +32,8 @@ class TrajectoryPoint:
     cum_input_tokens: float = 0.0
     cum_output_tokens: float = 0.0
     cum_cache_tokens: float = 0.0    # cache_read + cache_creation (matches load_arm's T_ca)
+    cum_cache_read_tokens: float = 0.0      # cache hits (billed ~10× cheaper)
+    cum_cache_creation_tokens: float = 0.0  # cache writes (billed at a ~25% premium)
     cum_cost_usd: float = 0.0        # authoritative at round ends; provisional mid-stream
     round_index: int = 0
     provisional_cost: bool = False   # True while streaming before the round's result event
@@ -110,7 +112,9 @@ class RunTrajectory:
     final_cost_usd: float = 0.0
     final_input_tokens: int = 0
     final_output_tokens: int = 0
-    final_cache_tokens: int = 0
+    final_cache_tokens: int = 0             # cache_read + cache_creation (kept as their sum)
+    final_cache_read_tokens: int = 0
+    final_cache_creation_tokens: int = 0
     classifier_config: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------ serialization
@@ -127,6 +131,8 @@ class RunTrajectory:
             "final_input_tokens": self.final_input_tokens,
             "final_output_tokens": self.final_output_tokens,
             "final_cache_tokens": self.final_cache_tokens,
+            "final_cache_read_tokens": self.final_cache_read_tokens,
+            "final_cache_creation_tokens": self.final_cache_creation_tokens,
             "classifier_config": self.classifier_config,
             "points": [asdict(p) for p in self.points],
             "bands": [asdict(b) for b in self.bands],
@@ -148,6 +154,8 @@ class RunTrajectory:
             final_input_tokens=int(d.get("final_input_tokens", 0)),
             final_output_tokens=int(d.get("final_output_tokens", 0)),
             final_cache_tokens=int(d.get("final_cache_tokens", 0)),
+            final_cache_read_tokens=int(d.get("final_cache_read_tokens", 0)),
+            final_cache_creation_tokens=int(d.get("final_cache_creation_tokens", 0)),
             classifier_config=d.get("classifier_config", {}) or {},
             points=[TrajectoryPoint(**p) for p in d.get("points", [])],
             bands=[ActivityBand(**b) for b in d.get("bands", [])],
@@ -187,6 +195,8 @@ class RunTrajectory:
             "input": [p.cum_input_tokens for p in self.points],
             "output": [p.cum_output_tokens for p in self.points],
             "cache": [p.cum_cache_tokens for p in self.points],
+            "cache_read": [p.cum_cache_read_tokens for p in self.points],
+            "cache_creation": [p.cum_cache_creation_tokens for p in self.points],
             "total": [p.cum_total_tokens for p in self.points],
             "spend": [p.cum_cost_usd for p in self.points],
         }
