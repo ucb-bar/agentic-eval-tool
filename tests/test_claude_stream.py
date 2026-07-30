@@ -1,6 +1,7 @@
 """Tests for the Claude Code stream-json parser."""
 import json
 from aet.tracking.claude_stream import parse_stream
+from aet.trajectory.pricing import PriceTable
 
 
 def _make_stream(*events) -> str:
@@ -158,6 +159,80 @@ def test_parse_stream_finish_reasons():
     r = parse_stream(_FULL_STREAM)
     assert r.turn_usage[0].finish_reasons == ["tool_use"]
     assert r.turn_usage[1].finish_reasons == ["end_turn"]
+
+
+# --------------------------------------------------------------------------- truncated / killed run
+# A run that is KILLED or times out never emits the terminal `result` event, so the CLI's
+# total_cost_usd / modelUsage are absent. The parser must still (a) count the assistant turns it
+# saw, (b) sum per-turn token usage, and (c) offer a per-turn × list-price cost estimate — never
+# report 0 cost / 0 turns when real usage exists in the transcript.
+_TRUNCATED_STREAM = _make_stream(
+    {"type": "system", "subtype": "init", "session_id": "sess-killed"},
+    {"type": "assistant", "message": {
+        "id": "k1", "role": "assistant",
+        "content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                     "input": {"command": "ls"}}],
+        "model": "claude-sonnet-4-6", "stop_reason": "tool_use",
+        "usage": {"input_tokens": 40, "output_tokens": 400,
+                  "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 2000}}},
+    {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1",
+         "content": [{"type": "text", "text": "ok"}]}]}},
+    {"type": "assistant", "message": {
+        "id": "k2", "role": "assistant",
+        "content": [{"type": "text", "text": "thinking..."}],
+        "model": "claude-sonnet-4-6", "stop_reason": "tool_use",
+        "usage": {"input_tokens": 37, "output_tokens": 420,
+                  "cache_creation_input_tokens": 500, "cache_read_input_tokens": 3000}}},
+    # NOTE: no `result` event — the run was killed mid-turn.
+)
+
+
+def test_truncated_stream_no_result_event():
+    r = parse_stream(_TRUNCATED_STREAM)
+    assert r.has_result_event is False
+    assert r.cost_usd == 0.0          # authoritative billed number is absent
+
+
+def test_truncated_stream_num_turns_reflects_assistant_turns():
+    r = parse_stream(_TRUNCATED_STREAM)
+    assert r.num_turns == 2           # not 0, despite the missing result event
+
+
+def test_truncated_stream_tokens_summed():
+    r = parse_stream(_TRUNCATED_STREAM)
+    assert r.total_input_tokens == (40 + 1000 + 2000) + (37 + 500 + 3000)
+    assert r.total_output_tokens == 400 + 420
+    assert r.total_cache_creation_tokens == 1000 + 500
+    assert r.total_cache_read_tokens == 2000 + 3000
+
+
+def test_truncated_stream_estimated_cost_matches_tokens_times_price():
+    r = parse_stream(_TRUNCATED_STREAM)
+    est = r.estimated_cost_usd(PriceTable())
+    # sonnet list price ($/Mtok): in 3, out 15, cache_read 0.30, cache_create 3.75
+    expected = (
+        (40 + 37) * 3.0
+        + (400 + 420) * 15.0
+        + (2000 + 3000) * 0.30
+        + (1000 + 500) * 3.75
+    ) / 1_000_000.0
+    assert est is not None
+    assert est > 0.0
+    assert abs(est - expected) < 1e-9
+
+
+def test_truncated_stream_unknown_model_cost_unavailable():
+    # An unknown model has no list price → estimate is None (cost-unavailable), never a fake $0.
+    stream = _make_stream(
+        {"type": "assistant", "message": {
+            "id": "u1", "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": "some-unpriced-model-9000", "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 20}}},
+    )
+    r = parse_stream(stream)
+    assert r.estimated_cost_usd(PriceTable()) is None
 
 
 def test_dry_run_stream_parses():

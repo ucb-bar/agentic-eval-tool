@@ -118,6 +118,7 @@ class ClaudeStreamResult:
     tool_calls: list[ToolCall]
     turn_usage: list[TurnUsage]
     model_usage: list[ModelUsage] = field(default_factory=list)
+    has_result_event: bool = False   # a terminal `result` event was seen (complete transcript)
 
     @property
     def total_input_tokens(self) -> int:
@@ -150,6 +151,35 @@ class ClaudeStreamResult:
             if tc.name not in seen:
                 seen.append(tc.name)
         return seen
+
+    def estimated_cost_usd(self, price_table=None) -> float | None:
+        """List-price cost estimate summed over per-turn ``TurnUsage`` × ``PriceTable``, per model.
+
+        This is the fallback for a **truncated/killed** transcript that never emitted a terminal
+        ``result`` event, so the authoritative :attr:`cost_usd` (the CLI's ``total_cost_usd``) is
+        absent and reads as ``0.0``. For a complete transcript prefer :attr:`cost_usd`; this is an
+        ESTIMATE from list prices, not the billed number.
+
+        Each turn is priced by its own model (falling back to the run's :attr:`model`). Returns
+        ``None`` when *no* turn can be priced (the model is cost-unavailable) — never a fabricated
+        ``$0``. When only some turns price, the unpriced ones contribute nothing (best-effort
+        partial estimate). ``price_table`` defaults to :meth:`PriceTable.from_env`.
+        """
+        if price_table is None:
+            from aet.trajectory.pricing import PriceTable
+            price_table = PriceTable.from_env()
+        total = 0.0
+        any_priced = False
+        for t in self.turn_usage:
+            c = price_table.estimate_usd(
+                t.input_tokens, t.output_tokens,
+                t.cache_read_input_tokens, t.cache_creation_input_tokens,
+                model=t.model or self.model,
+            )
+            if c is not None:
+                total += c
+                any_priced = True
+        return total if any_priced else None
 
 
 def _content_blocks(msg: dict) -> list[dict]:
@@ -265,6 +295,7 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
     session_id = ""
     model = ""
     success = False
+    has_result_event = False
     turn_num = 0
     seen_msg_ids: set[str] = set()   # session-log transcripts re-emit a message id; count once
 
@@ -344,6 +375,7 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
                         tool_calls_by_id[tid].is_error = bool(block.get("is_error", False))
 
         elif etype == "result":
+            has_result_event = True
             success = (event.get("subtype") == "success") and not event.get("is_error", False)
             result_text = event.get("result", "")
             # real CLI emits total_cost_usd; test fixtures use cost_usd
@@ -370,6 +402,12 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
                 if not last.finish_reasons:
                     last.finish_reasons = [result_stop_reason]
 
+    # A truncated/killed transcript never emitted a `result` event, so the CLI's authoritative
+    # num_turns is absent (0). Fall back to the assistant turns actually seen so the run does not
+    # report zero activity. (For a complete transcript the CLI value is authoritative — keep it.)
+    if not has_result_event:
+        num_turns = len(turn_usage)
+
     return ClaudeStreamResult(
         success=success,
         result_text=result_text,
@@ -382,4 +420,5 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
         tool_calls=list(tool_calls_by_id.values()),
         turn_usage=turn_usage,
         model_usage=model_usage_list,
+        has_result_event=has_result_event,
     )
