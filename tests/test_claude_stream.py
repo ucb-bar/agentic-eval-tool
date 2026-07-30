@@ -235,6 +235,104 @@ def test_truncated_stream_unknown_model_cost_unavailable():
     assert r.estimated_cost_usd(PriceTable()) is None
 
 
+# --------------------------------------------------------------------------- per-model breakdown
+# A run that delegates: an Opus orchestrator turn plus a Sonnet sub-agent turn, killed before the
+# terminal `result` event. per_model_usage() must still split the two models apart (derived from
+# per-turn usage), price each per its own list price, and report each model's activity share.
+_MULTI_MODEL_TRUNCATED = _make_stream(
+    {"type": "system", "subtype": "init", "session_id": "sess-multi"},
+    {"type": "assistant", "message": {
+        "id": "o1", "role": "assistant",
+        "content": [{"type": "text", "text": "orchestrating"}],
+        "model": "claude-opus-4-6", "stop_reason": "tool_use",
+        "usage": {"input_tokens": 100, "output_tokens": 200,
+                  "cache_creation_input_tokens": 400, "cache_read_input_tokens": 3000}}},
+    {"type": "assistant", "message": {
+        "id": "o2", "role": "assistant",
+        "content": [{"type": "text", "text": "still orchestrating"}],
+        "model": "claude-opus-4-6", "stop_reason": "tool_use",
+        "usage": {"input_tokens": 50, "output_tokens": 100,
+                  "cache_creation_input_tokens": 0, "cache_read_input_tokens": 1000}}},
+    {"type": "assistant", "message": {
+        "id": "s1", "role": "assistant",
+        "content": [{"type": "text", "text": "sub-agent work"}],
+        "model": "claude-sonnet-4-6", "stop_reason": "end_turn",
+        "usage": {"input_tokens": 30, "output_tokens": 60,
+                  "cache_creation_input_tokens": 0, "cache_read_input_tokens": 500}}},
+    # NOTE: no `result` event — modelUsage is absent, so this exercises the per-turn fallback.
+)
+
+
+def test_per_model_usage_splits_truncated_multi_model_run():
+    r = parse_stream(_MULTI_MODEL_TRUNCATED)
+    assert r.model_usage == []          # truncated → no authoritative modelUsage
+    breakdown = {mu.model: mu for mu in r.per_model_usage(PriceTable())}
+    assert set(breakdown) == {"claude-opus-4-6", "claude-sonnet-4-6"}
+
+    opus = breakdown["claude-opus-4-6"]
+    assert opus.input_tokens == 150            # 100 + 50, summed across opus turns
+    assert opus.output_tokens == 300           # 200 + 100
+    assert opus.cache_creation_input_tokens == 400
+    assert opus.cache_read_input_tokens == 4000  # 3000 + 1000
+
+    sonnet = breakdown["claude-sonnet-4-6"]
+    assert sonnet.input_tokens == 30
+    assert sonnet.output_tokens == 60
+    assert sonnet.cache_read_input_tokens == 500
+
+
+def test_per_model_usage_prices_each_model_by_its_own_rate():
+    r = parse_stream(_MULTI_MODEL_TRUNCATED)
+    breakdown = {mu.model: mu for mu in r.per_model_usage(PriceTable())}
+    # opus-4-6 rate ($/Mtok): in 5, out 25, cache_read 0.5, cache_create 6.25
+    exp_opus = (150 * 5.0 + 300 * 25.0 + 4000 * 0.5 + 400 * 6.25) / 1_000_000.0
+    # sonnet-4-6 rate ($/Mtok): in 3, out 15, cache_read 0.3, cache_create 3.75
+    exp_sonnet = (30 * 3.0 + 60 * 15.0 + 500 * 0.3 + 0 * 3.75) / 1_000_000.0
+    assert abs(breakdown["claude-opus-4-6"].cost_usd - exp_opus) < 1e-9
+    assert abs(breakdown["claude-sonnet-4-6"].cost_usd - exp_sonnet) < 1e-9
+    # the split sums to the whole-run per-turn estimate (no double counting, no gap)
+    assert abs(sum(mu.cost_usd for mu in r.per_model_usage(PriceTable()))
+               - r.estimated_cost_usd(PriceTable())) < 1e-9
+
+
+def test_per_model_usage_activity_share_sums_to_one():
+    r = parse_stream(_MULTI_MODEL_TRUNCATED)
+    items = r.per_model_usage(PriceTable())
+    shares = {mu.model: mu.activity_share for mu in items}
+    total_billed = sum(mu.total_billed_tokens for mu in items)
+    assert abs(sum(shares.values()) - 1.0) < 1e-9
+    opus = next(mu for mu in items if mu.model == "claude-opus-4-6")
+    assert abs(opus.activity_share - opus.total_billed_tokens / total_billed) < 1e-9
+    assert shares["claude-opus-4-6"] > shares["claude-sonnet-4-6"]
+
+
+def test_per_model_usage_prefers_authoritative_model_usage():
+    # When a terminal result event carries modelUsage, that authoritative split is used verbatim
+    # (with activity_share added), not the per-turn fallback.
+    stream = _make_stream(
+        {"type": "assistant", "message": {
+            "id": "a1", "role": "assistant", "content": [{"type": "text", "text": "hi"}],
+            "model": "claude-opus-4-6", "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 20}}},
+        {"type": "result", "subtype": "success", "is_error": False, "result": "done",
+         "total_cost_usd": 1.25, "num_turns": 1, "duration_ms": 10, "session_id": "s",
+         "modelUsage": {
+             "claude-opus-4-6": {"inputTokens": 1000, "outputTokens": 200,
+                                 "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+                                 "costUSD": 1.00},
+             "claude-sonnet-4-6": {"inputTokens": 100, "outputTokens": 100,
+                                   "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+                                   "costUSD": 0.25}}},
+    )
+    r = parse_stream(stream)
+    assert r.has_result_event is True
+    items = {mu.model: mu for mu in r.per_model_usage()}
+    assert set(items) == {"claude-opus-4-6", "claude-sonnet-4-6"}
+    assert items["claude-opus-4-6"].cost_usd == 1.00   # authoritative, not re-estimated
+    assert items["claude-sonnet-4-6"].cost_usd == 0.25
+    assert abs(sum(mu.activity_share for mu in items.values()) - 1.0) < 1e-9
+
+
 def test_dry_run_stream_parses():
     """The synthetic stream in claude_code_eval.py must parse cleanly."""
     import sys

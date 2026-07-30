@@ -12,7 +12,7 @@ comprehensive OTel instrumentation:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 def _extract_file_paths(tool_name: str, input_dict: dict) -> list[str]:
@@ -95,7 +95,14 @@ class TurnUsage:
 
 @dataclass
 class ModelUsage:
-    """Per-model cost and token breakdown (from the result event's modelUsage field)."""
+    """Per-model cost and token breakdown.
+
+    Sourced either from the result event's ``modelUsage`` field (authoritative) or, for a
+    truncated transcript, aggregated from per-turn :class:`TurnUsage` grouped by model
+    (see :meth:`ClaudeStreamResult.per_model_usage`). ``activity_share`` is this model's fraction
+    of the run's total billed tokens (0.0 until :meth:`~ClaudeStreamResult.per_model_usage` fills
+    it in).
+    """
     model: str
     input_tokens: int
     output_tokens: int
@@ -103,6 +110,13 @@ class ModelUsage:
     cache_creation_input_tokens: int
     cost_usd: float
     web_search_requests: int = 0
+    activity_share: float = 0.0
+
+    @property
+    def total_billed_tokens(self) -> int:
+        """Billed tokens for this model: raw input + output + cache read + cache creation."""
+        return (self.input_tokens + self.output_tokens
+                + self.cache_read_input_tokens + self.cache_creation_input_tokens)
 
 
 @dataclass
@@ -180,6 +194,64 @@ class ClaudeStreamResult:
                 total += c
                 any_priced = True
         return total if any_priced else None
+
+    def per_model_usage(self, price_table=None) -> list[ModelUsage]:
+        """Per-model token/cost breakdown for this run, each carrying its ``activity_share``.
+
+        The whole point is that a run mixing an orchestrator model with delegated sub-agent models
+        (e.g. Opus orchestrator + Sonnet subagents + Haiku background) reports **all** of them
+        distinctly, not just the run's primary model.
+
+        Resolution:
+          * when the authoritative result-event ``modelUsage`` is present (:attr:`model_usage`),
+            prefer it verbatim — it is the billed split;
+          * otherwise (a truncated/killed transcript that never emitted a ``result`` event, so
+            :attr:`model_usage` is empty) fall back to aggregating the per-turn :class:`TurnUsage`
+            grouped by :attr:`TurnUsage.model` (dedup is already handled by the parser) and price
+            each model from its summed tokens via ``PriceTable`` — a list-price ESTIMATE. A
+            cost-unavailable model keeps ``cost_usd = 0.0`` (never a fabricated price); its tokens
+            and share are still reported.
+
+        Every returned :class:`ModelUsage` gets ``activity_share`` = its fraction of the run's
+        total billed tokens (0.0 when the run recorded no billed tokens). ``price_table`` defaults
+        to :meth:`PriceTable.from_env`. Models appear in first-seen turn order (or ``modelUsage``
+        iteration order).
+        """
+        if self.model_usage:
+            items = [replace(mu) for mu in self.model_usage]
+        else:
+            if price_table is None:
+                from aet.trajectory.pricing import PriceTable
+                price_table = PriceTable.from_env()
+            by_model: dict[str, ModelUsage] = {}
+            order: list[str] = []
+            for t in self.turn_usage:
+                key = t.model or self.model
+                mu = by_model.get(key)
+                if mu is None:
+                    mu = ModelUsage(
+                        model=key, input_tokens=0, output_tokens=0,
+                        cache_read_input_tokens=0, cache_creation_input_tokens=0, cost_usd=0.0,
+                    )
+                    by_model[key] = mu
+                    order.append(key)
+                mu.input_tokens += t.input_tokens
+                mu.output_tokens += t.output_tokens
+                mu.cache_read_input_tokens += t.cache_read_input_tokens
+                mu.cache_creation_input_tokens += t.cache_creation_input_tokens
+            for mu in by_model.values():
+                c = price_table.estimate_usd(
+                    mu.input_tokens, mu.output_tokens,
+                    mu.cache_read_input_tokens, mu.cache_creation_input_tokens, model=mu.model,
+                )
+                if c is not None:
+                    mu.cost_usd = c
+            items = [by_model[k] for k in order]
+
+        total_billed = sum(mu.total_billed_tokens for mu in items)
+        for mu in items:
+            mu.activity_share = (mu.total_billed_tokens / total_billed) if total_billed else 0.0
+        return items
 
 
 def _content_blocks(msg: dict) -> list[dict]:

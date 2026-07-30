@@ -29,6 +29,17 @@ _M_OUTPUT = "gen_ai.usage.output_tokens"
 _M_CACHE_READ = "gen_ai.usage.cache_read.input_tokens"
 _M_CACHE_CREATE = "gen_ai.usage.cache_creation.input_tokens"
 
+# within-run per-model split, written by EvalRunLogger.log_model_usage as
+# `per_model.<safe-model>.<field>` (safe = model with `-`/`.` replaced by `_`).
+_M_PER_MODEL_PREFIX = "per_model."
+_PER_MODEL_FIELDS = {
+    "cost_usd": "cost",
+    "input_tokens_raw": "input",
+    "output_tokens": "output",
+    "cache_read_tokens": "cache_read",
+    "cache_creation_tokens": "cache_creation",
+}
+
 
 @dataclass
 class TokenTotals:
@@ -61,6 +72,25 @@ class TokenTotals:
 
 
 @dataclass
+class RunModelSpend:
+    """One model's within-run spend/tokens (from a run's ``per_model.<model>.*`` metrics)."""
+
+    model: str
+    cost_usd: float | None = None           # None => this model's cost was unavailable
+    tokens: TokenTotals = field(default_factory=TokenTotals)
+
+    @property
+    def cost_available(self) -> bool:
+        return self.cost_usd is not None
+
+    def to_dict(self) -> dict:
+        return {
+            "model": self.model, "cost_usd": self.cost_usd,
+            "cost_available": self.cost_available, "tokens": self.tokens.to_dict(),
+        }
+
+
+@dataclass
 class RunSpend:
     """The spend/tokens/identity of a single run."""
 
@@ -71,6 +101,9 @@ class RunSpend:
     timestamp: str | None = None            # ISO created_at, for calendar ordering
     cost_usd: float | None = None           # None => cost unavailable (never treated as $0)
     tokens: TokenTotals = field(default_factory=TokenTotals)
+    # within-run per-model split (keyed by recorded safe-model name); empty when the run recorded
+    # no `per_model.*` metrics — then the whole run is attributed to its single identity `model`.
+    per_model: dict[str, RunModelSpend] = field(default_factory=dict)
 
     @property
     def cost_available(self) -> bool:
@@ -82,24 +115,27 @@ class RunSpend:
             "model": self.model, "timestamp": self.timestamp,
             "cost_usd": self.cost_usd, "cost_available": self.cost_available,
             "tokens": self.tokens.to_dict(),
+            "per_model": {k: v.to_dict() for k, v in self.per_model.items()},
         }
 
 
 @dataclass
 class ModelSpend:
-    """Aggregated spend/tokens for one model across the rollup."""
+    """Aggregated spend/tokens for one model across the rollup (a true within-run split: a run that
+    used several models contributes to each of their :class:`ModelSpend` records)."""
 
     model: str
     cost_usd: float = 0.0
     n_runs: int = 0
     n_priced_runs: int = 0
     tokens: TokenTotals = field(default_factory=TokenTotals)
+    activity_share: float = 0.0             # fraction of the rollup's total billed tokens
 
     def to_dict(self) -> dict:
         return {
             "model": self.model, "cost_usd": self.cost_usd,
             "n_runs": self.n_runs, "n_priced_runs": self.n_priced_runs,
-            "tokens": self.tokens.to_dict(),
+            "tokens": self.tokens.to_dict(), "activity_share": self.activity_share,
         }
 
 
@@ -183,8 +219,11 @@ def _read_jsonl(path: Path):
             continue
 
 
-def _read_metrics(run_dir: Path) -> tuple[float | None, TokenTotals, bool]:
-    """(cost_usd, tokens, saw_agent_metrics) from ``logs/metrics.jsonl`` — the `aet runs` contract.
+def _read_metrics(
+    run_dir: Path,
+) -> tuple[float | None, TokenTotals, bool, dict[str, RunModelSpend]]:
+    """(cost_usd, tokens, saw_agent_metrics, per_model) from ``logs/metrics.jsonl`` — the `aet runs`
+    contract, extended with the within-run ``per_model.<model>.*`` split.
 
     Values are logged as final scalars; the last occurrence of each name wins.
     """
@@ -192,12 +231,13 @@ def _read_metrics(run_dir: Path) -> tuple[float | None, TokenTotals, bool]:
     cost: float | None = None
     tok = TokenTotals()
     saw = False
+    per_model: dict[str, RunModelSpend] = {}
     if not path.is_file():
-        return cost, tok, saw
+        return cost, tok, saw, per_model
     for m in _read_jsonl(path):
         name = m.get("name")
         val = m.get("value")
-        if val is None:
+        if val is None or not name:
             continue
         if name == _M_COST:
             cost = float(val)
@@ -214,8 +254,22 @@ def _read_metrics(run_dir: Path) -> tuple[float | None, TokenTotals, bool]:
         elif name == _M_CACHE_CREATE:
             tok.cache_creation = int(val)
             saw = True
+        elif name.startswith(_M_PER_MODEL_PREFIX):
+            # `per_model.<safe-model>.<field>`; safe-model never contains a dot (`-`/`.` → `_`),
+            # so the last dotted segment is the field and the rest is the model key.
+            model_key, _, mfield = name[len(_M_PER_MODEL_PREFIX):].rpartition(".")
+            if not model_key or mfield not in _PER_MODEL_FIELDS:
+                continue
+            rms = per_model.setdefault(model_key, RunModelSpend(model=model_key))
+            attr = _PER_MODEL_FIELDS[mfield]
+            if attr == "cost":
+                rms.cost_usd = float(val)
+            else:
+                setattr(rms.tokens, attr, int(val))
     tok.cache_total = tok.cache_read + tok.cache_creation
-    return cost, tok, saw
+    for rms in per_model.values():
+        rms.tokens.cache_total = rms.tokens.cache_read + rms.tokens.cache_creation
+    return cost, tok, saw, per_model
 
 
 def _read_trajectory(run_dir: Path):
@@ -281,7 +335,7 @@ def read_run_spend(run_dir: str | Path) -> RunSpend:
     run_dir = Path(run_dir)
     run_id, suite, model, timestamp = _read_identity(run_dir)
 
-    cost, tok, saw = _read_metrics(run_dir)
+    cost, tok, saw, per_model = _read_metrics(run_dir)
     if not saw:
         traj = _read_trajectory(run_dir)
         if traj is not None:
@@ -303,7 +357,7 @@ def read_run_spend(run_dir: str | Path) -> RunSpend:
                     break
 
     return RunSpend(run_dir=str(run_dir), run_id=run_id, suite=suite, model=model,
-                    timestamp=timestamp, cost_usd=cost, tokens=tok)
+                    timestamp=timestamp, cost_usd=cost, tokens=tok, per_model=per_model)
 
 
 # ---------------------------------------------------------------------------- rollup
@@ -332,16 +386,33 @@ def rollup_runs(run_dirs: Iterable[str | Path], *,
         roll.runs.append(rs)
         roll.tokens.add(rs.tokens)
 
-        ms = roll.per_model.setdefault(rs.model or "(unknown)",
-                                       ModelSpend(model=rs.model or "(unknown)"))
-        ms.n_runs += 1
-        ms.tokens.add(rs.tokens)
+        # Run-level total is authoritative and counted once (keeps total/headroom behavior).
         if rs.cost_available:
             roll.total_cost_usd += rs.cost_usd
-            ms.cost_usd += rs.cost_usd
-            ms.n_priced_runs += 1
         else:
             roll.unpriced_runs += 1
+
+        # Per-model split: prefer the run's recorded within-run `per_model.*` breakdown so a run
+        # that mixed an orchestrator + delegated sub-agent models contributes to EACH model's
+        # ModelSpend. A run without that breakdown falls back to its single identity model.
+        if rs.per_model:
+            contributions = [
+                (rms.model, rms.cost_usd, rms.tokens) for rms in rs.per_model.values()
+            ]
+        else:
+            contributions = [(rs.model or "(unknown)", rs.cost_usd, rs.tokens)]
+        for model_key, mcost, mtok in contributions:
+            ms = roll.per_model.setdefault(model_key, ModelSpend(model=model_key))
+            ms.n_runs += 1
+            ms.tokens.add(mtok)
+            if mcost is not None:
+                ms.cost_usd += mcost
+                ms.n_priced_runs += 1
+
+    # Each model's activity share = its fraction of the rollup's total billed tokens.
+    total_billed = roll.tokens.total
+    for ms in roll.per_model.values():
+        ms.activity_share = (ms.tokens.total / total_billed) if total_billed else 0.0
 
     # calendar-time cumulative series (runs without a timestamp sort last, by run_id)
     def _key(r: RunSpend):

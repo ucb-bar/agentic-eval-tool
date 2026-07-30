@@ -57,6 +57,92 @@ def test_rollup_aggregates_cost_tokens_and_per_model(tmp_path):
     assert cum[-1]["cumulative_usd"] == pytest.approx(4.05)
 
 
+def _make_multimodel_run(root, suite, run_id, *, identity_model, per_model,
+                         created_at="2026-07-01T00:00:00Z"):
+    """A run that recorded a within-run `per_model.<safe>.*` split (an orchestrator + sub-agents).
+
+    ``per_model`` maps safe-model-name -> dict(cost, input, output, cache_read, cache_creation).
+    The run's top-level ``aet.agent.cost_usd`` is the sum of the per-model costs (the authoritative
+    whole-run total), and the top-level token counts are the per-model sums.
+    """
+    rd = root / suite / run_id
+    (rd / "logs").mkdir(parents=True)
+    rd.joinpath("run_record.json").write_text(json.dumps({
+        "run_id": run_id, "suite": suite, "model": identity_model, "created_at": created_at,
+    }))
+    total_cost = sum(d["cost"] for d in per_model.values())
+    tin = sum(d.get("input", 0) for d in per_model.values())
+    tout = sum(d.get("output", 0) for d in per_model.values())
+    tread = sum(d.get("cache_read", 0) for d in per_model.values())
+    tcreate = sum(d.get("cache_creation", 0) for d in per_model.values())
+    lines = [
+        {"name": "aet.agent.cost_usd", "value": total_cost},
+        {"name": "gen_ai.usage.input_tokens", "value": tin},
+        {"name": "gen_ai.usage.output_tokens", "value": tout},
+        {"name": "gen_ai.usage.cache_read.input_tokens", "value": tread},
+        {"name": "gen_ai.usage.cache_creation.input_tokens", "value": tcreate},
+    ]
+    for safe, d in per_model.items():
+        billed = (d.get("input", 0) + d.get("output", 0)
+                  + d.get("cache_read", 0) + d.get("cache_creation", 0))
+        lines += [
+            {"name": f"per_model.{safe}.cost_usd", "value": d["cost"]},
+            {"name": f"per_model.{safe}.input_tokens_raw", "value": d.get("input", 0)},
+            {"name": f"per_model.{safe}.output_tokens", "value": d.get("output", 0)},
+            {"name": f"per_model.{safe}.cache_read_tokens", "value": d.get("cache_read", 0)},
+            {"name": f"per_model.{safe}.cache_creation_tokens", "value": d.get("cache_creation", 0)},
+            {"name": f"per_model.{safe}.total_billed_tokens", "value": billed},
+        ]
+    (rd / "logs" / "metrics.jsonl").write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+    return rd
+
+
+def test_rollup_splits_within_run_per_model(tmp_path):
+    # Two runs, EACH an Opus orchestrator + a Sonnet sub-agent (a truncated bedrock run shape).
+    root = tmp_path / "runs"
+    _make_multimodel_run(
+        root, "capsule", "r1", identity_model="us.anthropic.claude-opus-4-6-v1",
+        per_model={
+            "claude_opus_4_6": {"cost": 9.55, "input": 1000, "output": 2000, "cache_read": 4000},
+            "claude_sonnet_4_6": {"cost": 0.13, "input": 100, "output": 200, "cache_read": 300},
+        }, created_at="2026-07-01T00:00:00Z")
+    _make_multimodel_run(
+        root, "capsule", "r2", identity_model="us.anthropic.claude-opus-4-6-v1",
+        per_model={
+            "claude_opus_4_6": {"cost": 4.00, "input": 500, "output": 1000, "cache_read": 2000},
+            "claude_sonnet_4_6": {"cost": 0.07, "input": 50, "output": 100, "cache_read": 150},
+        }, created_at="2026-07-02T00:00:00Z")
+
+    roll = rollup_runs([root])
+    assert roll.n_runs == 2
+    # whole-run totals unchanged (authoritative per-run cost counted once)
+    assert roll.total_cost_usd == pytest.approx(9.55 + 0.13 + 4.00 + 0.07)
+
+    # the per-model split shows BOTH models distinctly, each spanning both runs
+    assert set(roll.per_model) == {"claude_opus_4_6", "claude_sonnet_4_6"}
+    opus = roll.per_model["claude_opus_4_6"]
+    sonnet = roll.per_model["claude_sonnet_4_6"]
+    assert opus.cost_usd == pytest.approx(13.55)
+    assert sonnet.cost_usd == pytest.approx(0.20)
+    assert opus.n_runs == 2 and sonnet.n_runs == 2
+    assert opus.tokens.input == 1500 and sonnet.tokens.input == 150
+
+    # activity shares are token fractions and sum to 1 across models
+    assert abs(opus.activity_share + sonnet.activity_share - 1.0) < 1e-9
+    assert opus.activity_share > sonnet.activity_share
+    total_billed = roll.tokens.total
+    assert abs(opus.activity_share - opus.tokens.total / total_billed) < 1e-9
+
+
+def test_rollup_without_per_model_attributes_to_identity_model(tmp_path):
+    # Back-compat: a run with no per_model.* metrics is still attributed to its single model.
+    root = tmp_path / "runs"
+    _make_run(root, "s", "r1", model="claude-opus-4-8", cost=3.0, cin=100, cout=50)
+    roll = rollup_runs([root])
+    assert set(roll.per_model) == {"claude-opus-4-8"}
+    assert roll.per_model["claude-opus-4-8"].cost_usd == pytest.approx(3.0)
+
+
 def test_unavailable_cost_is_not_counted_as_zero(tmp_path):
     root = tmp_path / "runs"
     _make_run(root, "s", "priced", model="claude-opus-4-8", cost=5.0)

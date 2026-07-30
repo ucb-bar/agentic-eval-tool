@@ -303,14 +303,15 @@ def _print_spend_table(roll) -> None:
           f"(read {tok.cache_read:,} / create {tok.cache_creation:,})")
 
     if roll.per_model:
-        print("\n    per-model")
+        print("\n    per-model  (within-run split — every model a run touched, not just its primary)")
         name_w = max(len(m) for m in roll.per_model)
         for model, ms in sorted(roll.per_model.items(),
                                 key=lambda kv: kv[1].cost_usd, reverse=True):
             unp = ms.n_runs - ms.n_priced_runs
             unp_s = f"  ({unp} unpriced)" if unp else ""
             print(f"      {model:<{name_w}}  ${ms.cost_usd:>10.4f}  "
-                  f"{ms.n_runs:>3} run(s)  {ms.tokens.total:>12,} tok{unp_s}")
+                  f"{ms.n_runs:>3} run(s)  {ms.tokens.total:>12,} tok  "
+                  f"{ms.activity_share * 100:>5.1f}% activity{unp_s}")
 
     if roll.budget_usd is not None:
         state = "OVER BUDGET" if roll.over_budget else "within budget"
