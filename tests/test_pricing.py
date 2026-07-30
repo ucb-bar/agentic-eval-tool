@@ -17,6 +17,54 @@ def test_claude_rates_unchanged():
     assert shape == pytest.approx(3.0)
 
 
+def test_bedrock_version_specific_rates_reproduce_known_costs():
+    """opus-4-6 / sonnet-4-6 / haiku-4-5 are billed at a distinct Bedrock tier from the classic
+    Claude list price; the version-specific keys must win over the coarse ones and reproduce the
+    exact costUSD Claude Code reports for these ids (verified from `modelUsage.costUSD`)."""
+    pt = PriceTable()
+    # opus-4-6: (5, 25, 0.5, 6.25) — NOT classic Opus 15/75
+    assert pt.estimate_usd(386, 130, 0, 32291,
+                           model="us.anthropic.claude-opus-4-6-v1") == pytest.approx(
+        0.20699875, abs=1e-6)
+    # sonnet-4-6: (3, 15, 0.3, 3.75)
+    assert pt.estimate_usd(386, 81, 0, 31722,
+                           model="us.anthropic.claude-sonnet-4-6") == pytest.approx(
+        0.1213305, abs=1e-6)
+    # haiku-4-5: (1, 5, 0.1, 1.25) — NOT haiku-3.5's 0.80/4
+    assert pt.estimate_usd(10, 110, 0, 32298,
+                           model="us.anthropic.claude-haiku-4-5-20251001-v1:0") == pytest.approx(
+        0.0409325, abs=1e-6)
+
+
+def test_opus_4_6_not_classic_opus_rate():
+    """The versioned opus-4-6 id must resolve to the 5/25/0.5/6.25 tier, not classic 15/75."""
+    pt = PriceTable()
+    # one input Mtok at the classic rate would be $15; at the 4-6 tier it is $5
+    got = pt.estimate_usd(1_000_000, 0, 0, 0, model="us.anthropic.claude-opus-4-6-v1")
+    assert got == pytest.approx(5.0)
+    assert got != pytest.approx(15.0)
+    # full 1-Mtok-each sanity vs the classic-opus total (15+75+1.5+18.75 = 110.25)
+    full = pt.estimate_usd(1_000_000, 1_000_000, 1_000_000, 1_000_000,
+                           model="us.anthropic.claude-opus-4-6-v1")
+    assert full == pytest.approx(5.0 + 25.0 + 0.5 + 6.25)
+    assert full != pytest.approx(110.25)
+    # a classic (unversioned / 4.1) opus id still uses the 15/75 generic
+    assert pt.estimate_usd(1_000_000, 0, 0, 0,
+                           model="us.anthropic.claude-opus-4-1") == pytest.approx(15.0)
+
+
+def test_haiku_4_5_not_haiku_3_5_rate():
+    """The versioned haiku-4-5 id resolves to 1/5/0.1/1.25, not haiku-3.5's 0.80/4/0.08/1.0."""
+    pt = PriceTable()
+    got = pt.estimate_usd(1_000_000, 0, 0, 0,
+                          model="us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    assert got == pytest.approx(1.0)
+    assert got != pytest.approx(0.80)
+    # older haiku still uses the generic 0.80 rate
+    assert pt.estimate_usd(1_000_000, 0, 0, 0,
+                           model="anthropic.claude-3-5-haiku") == pytest.approx(0.80)
+
+
 def test_nova_rates_priced():
     pt = PriceTable()
     # input+output list prices verified from AWS Bedrock pricing

@@ -31,8 +31,18 @@ PRICE_TABLE_ENV = "AET_PRICE_TABLE"
 
 # USD / Mtok: (input, output, cache_read, cache_creation)
 _DEFAULT_RATES: dict[str, tuple[float, float, float, float]] = {
+    # Version-specific Bedrock rates, empirically verified by reverse-engineering Claude Code's
+    # authoritative `modelUsage.costUSD` (each follows Anthropic's output=5×input,
+    # cache_read=0.1×input, cache_write=1.25×input multipliers). These families are billed at a
+    # different tier than the classic Claude list price, so they must match BEFORE the coarse
+    # `opus`/`sonnet`/`haiku` keys — see `_rate`, which resolves longest-key-wins. Keys are
+    # substrings of ids like `us.anthropic.claude-opus-4-6-v1` / `...haiku-4-5-20251001-v1:0`.
+    "opus-4-6":   (5.0, 25.0, 0.5, 6.25),   # NOT classic Opus 15/75
+    "sonnet-4-6": (3.0, 15.0, 0.3, 3.75),
+    "haiku-4-5":  (1.0, 5.0, 0.1, 1.25),    # NOT haiku-3.5's 0.80/4
     # Anthropic Claude list price (matches the oscar-merlin reference PR_IN/OUT/CR/CW). These
-    # substrings also match Bedrock's `anthropic.claude-*` / `us.anthropic.*` model ids.
+    # substrings also match Bedrock's `anthropic.claude-*` / `us.anthropic.*` model ids. Kept as
+    # generic fallbacks for versions without a specific entry (classic Opus 4/4.1 really is 15/75).
     "opus":   (15.0, 75.0, 1.5, 18.75),
     "sonnet": (3.0, 15.0, 0.3, 3.75),
     "haiku":  (0.80, 4.0, 0.08, 1.0),
@@ -75,11 +85,21 @@ class PriceTable:
     fallback: str | None = None
 
     def _rate(self, model: str) -> tuple[float, float, float, float] | None:
-        """The matching rate tuple, or ``None`` when the model is cost-unavailable."""
+        """The matching rate tuple, or ``None`` when the model is cost-unavailable.
+
+        Resolution is **longest-key-wins**: among all keys that are a case-insensitive substring
+        of the model id, the most specific (longest) one is chosen, so a versioned id like
+        ``us.anthropic.claude-opus-4-6-v1`` matches ``opus-4-6`` rather than the coarse ``opus``.
+        Ties break on the key string for determinism, independent of dict insertion order.
+        """
         m = (model or "").lower()
-        for key, r in self.rates.items():
-            if key in m:
-                return r
+        best_key: str | None = None
+        for key in self.rates:
+            if key in m and (best_key is None
+                             or (len(key), key) > (len(best_key), best_key)):
+                best_key = key
+        if best_key is not None:
+            return self.rates[best_key]
         if self.fallback is not None:
             return self.rates.get(self.fallback)
         return None
