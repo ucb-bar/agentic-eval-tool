@@ -95,8 +95,16 @@ def _cmd_plot(args) -> None:
         from aet.viz.trajectory_plot import plot_comparison
         fig = plot_comparison(trajs, log_tokens=not args.linear_tokens)
     else:
+        split_cache = getattr(args, "split_cache", False)
+        if split_cache and not any(p.cum_cache_read_tokens or p.cum_cache_creation_tokens
+                                   for p in main_traj.points):
+            # Two lines flat at zero look like a measurement of "no cache activity" rather than
+            # like missing data, so say which it is instead of drawing it silently.
+            print("[aet] warning: --split-cache requested but this trajectory carries no "
+                  "cache read/creation split (both series are zero); the source recorded only "
+                  "the cache total", file=sys.stderr)
         fig = plot_trajectory(main_traj, log_tokens=not args.linear_tokens,
-                              show_spend=not args.no_spend)
+                              show_spend=not args.no_spend, split_cache=split_cache)
 
     out = Path(args.out) if args.out else Path(args.run).with_suffix(f".{kind}.png")
     for p in _save_fig(fig, out, args.dpi):

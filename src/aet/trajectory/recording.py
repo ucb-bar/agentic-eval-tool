@@ -27,13 +27,17 @@ def emit_trajectory(traj: RunTrajectory, logger, run_path: str | Path) -> Path:
         "final_input_tokens": traj.final_input_tokens,
         "final_output_tokens": traj.final_output_tokens,
         "final_cache_tokens": traj.final_cache_tokens,
+        "final_cache_read_tokens": traj.final_cache_read_tokens,
+        "final_cache_creation_tokens": traj.final_cache_creation_tokens,
     })
     for rb in traj.rounds:
         logger.log_round_boundary(rb)
     for i, p in enumerate(traj.points):
         logger.log_trajectory_point(
             i, p.t_s, p.cum_input_tokens, p.cum_output_tokens, p.cum_cache_tokens,
-            p.cum_cost_usd, p.round_index, p.provisional_cost)
+            p.cum_cost_usd, p.round_index, p.provisional_cost,
+            cum_cache_read=p.cum_cache_read_tokens,
+            cum_cache_creation=p.cum_cache_creation_tokens)
     for m in traj.milestones:
         logger.log_test_milestone(m.t_s, m.n_passed, m.n_total, m.round_index, m.scope)
 
@@ -56,6 +60,10 @@ def trajectory_from_logs(run_path: str | Path) -> RunTrajectory:
     ``aet.traj.round``/``aet.traj.milestone`` events; totals from the ``aet.traj.summary`` param.
     Activity bands are not stored in logs (they belong to tool events) and come back empty here —
     prefer ``metrics/trajectory.json`` (via :meth:`RunTrajectory.from_run_dir`) for full fidelity.
+
+    Logs written before the cache read/creation split was recorded carry only the cache total; the
+    two split series then come back as zero, which is why ``aet plot --split-cache`` says so rather
+    than drawing two flat lines.
     """
     run_path = Path(run_path)
     logs = run_path / "logs"
@@ -80,6 +88,9 @@ def trajectory_from_logs(run_path: str | Path) -> RunTrajectory:
             cum_input_tokens=float(d.get("aet.traj.cum_input_tokens", 0.0) or 0.0),
             cum_output_tokens=float(d.get("aet.traj.cum_output_tokens", 0.0) or 0.0),
             cum_cache_tokens=float(d.get("aet.traj.cum_cache_tokens", 0.0) or 0.0),
+            cum_cache_read_tokens=float(d.get("aet.traj.cum_cache_read_tokens", 0.0) or 0.0),
+            cum_cache_creation_tokens=float(
+                d.get("aet.traj.cum_cache_creation_tokens", 0.0) or 0.0),
             cum_cost_usd=float(d.get("aet.traj.cum_cost_usd", 0.0) or 0.0),
             round_index=int(d.get("aet.traj.round_index", 0) or 0),
             provisional_cost=bool(d.get("aet.traj.provisional_cost", 0.0)),
@@ -128,6 +139,11 @@ def trajectory_from_logs(run_path: str | Path) -> RunTrajectory:
                                             points[-1].cum_output_tokens if points else 0)),
         final_cache_tokens=int(summary.get("final_cache_tokens",
                                            points[-1].cum_cache_tokens if points else 0)),
+        final_cache_read_tokens=int(summary.get(
+            "final_cache_read_tokens", points[-1].cum_cache_read_tokens if points else 0)),
+        final_cache_creation_tokens=int(summary.get(
+            "final_cache_creation_tokens",
+            points[-1].cum_cache_creation_tokens if points else 0)),
     )
     return traj
 

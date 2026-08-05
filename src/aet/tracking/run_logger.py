@@ -118,12 +118,24 @@ class EvalRunLogger:
     def log_trajectory_point(self, index: int, t_s: float,
                              cum_input: float, cum_output: float, cum_cache: float,
                              cum_cost: float, round_index: int = 0,
-                             provisional_cost: bool = False) -> None:
-        """One cumulative sample as a family of step-metrics keyed by point ``index``."""
+                             provisional_cost: bool = False,
+                             cum_cache_read: float = 0.0,
+                             cum_cache_creation: float = 0.0) -> None:
+        """One cumulative sample as a family of step-metrics keyed by point ``index``.
+
+        ``cum_cache`` is the sum the cost model bills as one class; the read/creation split is
+        logged alongside it because the two are priced an order of magnitude apart (a read is
+        ~0.1x the input rate, a write ~1.25x), so a curve that only carries the sum cannot show
+        where a run's cache spend went. Both split params default to 0.0: callers written against
+        the older signature keep working, and a log recorded before this change reconstructs with
+        the split fields at zero rather than failing to load.
+        """
         self.log_metric_step("aet.traj.t_s", t_s, step=index)
         self.log_metric_step("aet.traj.cum_input_tokens", cum_input, step=index)
         self.log_metric_step("aet.traj.cum_output_tokens", cum_output, step=index)
         self.log_metric_step("aet.traj.cum_cache_tokens", cum_cache, step=index)
+        self.log_metric_step("aet.traj.cum_cache_read_tokens", cum_cache_read, step=index)
+        self.log_metric_step("aet.traj.cum_cache_creation_tokens", cum_cache_creation, step=index)
         self.log_metric_step("aet.traj.cum_total_tokens", cum_input + cum_output + cum_cache,
                              step=index)
         self.log_metric_step("aet.traj.cum_cost_usd", cum_cost, step=index)

@@ -90,6 +90,7 @@ def plot_trajectory(traj: RunTrajectory, *, ax=None, log_tokens: bool = True,
     ax.set_xlim(0, max(t[-1] if t else 1.0, 1e-6))
 
     # cumulative spend on a twin axis
+    axs = None
     if show_spend and t:
         axs = ax.twinx()
         axs.plot(t, s["spend"], color=S.L_SPEND, lw=2.2, label="spend ($)", zorder=6)
@@ -97,6 +98,18 @@ def plot_trajectory(traj: RunTrajectory, *, ax=None, log_tokens: bool = True,
         axs.tick_params(axis="y", labelsize=10 * fs, colors=S.L_SPEND)
         for sp in ("top",):
             axs.spines[sp].set_visible(False)
+
+    # key for the lines. Every series above already carries a ``label``; without this the figure
+    # is four-to-six unlabelled curves, and under ``split_cache`` the two cache lines differ only
+    # by dash pattern, so there is no way to tell a read from a write by eye. The spend handle
+    # lives on the twin axis and has to be merged in by hand or it is dropped.
+    handles, labels = ax.get_legend_handles_labels()
+    if axs is not None:
+        h2, l2 = axs.get_legend_handles_labels()
+        handles, labels = handles + h2, labels + l2
+    if handles:
+        ax.legend(handles, labels, loc="upper left", fontsize=10 * fs, ncol=2,
+                  borderaxespad=0.6, handlelength=2.6, labelspacing=0.35)
 
     # gold test-pass milestones
     if show_milestones and traj.milestones:
@@ -113,8 +126,9 @@ def plot_trajectory(traj: RunTrajectory, *, ax=None, log_tokens: bool = True,
         ax.axvline(rb.t_start_s / 60.0, color=S.INK, ls=(0, (1, 3)), lw=0.8, alpha=0.35, zorder=2)
 
     cost = f"~${traj.final_cost_usd:.2f}" if traj.provisional else f"${traj.final_cost_usd:.2f}"
-    S.title(ax, f"{traj.run_id}    ·    {traj.num_rounds} rounds · {cost} · "
-                f"{traj.duration_s / 60.0:.0f} min", fs=15 * fs)
+    n = traj.num_rounds
+    S.title(ax, f"{traj.run_id}    ·    {n} round{'' if n == 1 else 's'} · {cost} · "
+                f"{S.fmt_duration(traj.duration_s)}", fs=15 * fs)
     fig.tight_layout()
     return fig
 

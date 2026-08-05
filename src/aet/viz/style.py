@@ -147,3 +147,26 @@ def series_styles(n: int) -> list[tuple]:
     return [(_SERIES_COLORS[i % len(_SERIES_COLORS)],
              _SERIES_MARKERS[i % len(_SERIES_MARKERS)],
              _SERIES_DASHES[i % len(_SERIES_DASHES)]) for i in range(n)]
+
+
+# ---- label formatters ---------------------------------------------------------------
+# Both exist because the fixed-unit versions they replace rounded real measurements away:
+# `{duration_s/60:.0f} min` titled a 26-second run "0 min", and `{tokens/1e6:.0f}M`
+# labelled a 151,000-token arm "0M". A figure that reports a measurement as zero is worse
+# than one that omits it, because zero reads as a finding.
+
+
+def fmt_duration(seconds: float) -> str:
+    """A wall time in the unit that does not round it away — seconds under 90 s, else minutes."""
+    if seconds < 90.0:
+        return f"{seconds:.0f} s"
+    return f"{seconds / 60.0:.0f} min"
+
+
+def fmt_tokens(count: float) -> str:
+    """A token count in the largest unit that still shows a significant digit."""
+    if count < 1_000:
+        return f"{count:.0f}"
+    if count < 1_000_000:
+        return f"{count / 1_000:.0f}k"
+    return f"{count / 1_000_000:.1f}M"

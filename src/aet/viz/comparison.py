@@ -153,19 +153,21 @@ def _milestones(ax, traj, *, topax=None, fs=1.0, labels=True):
         tok = float(np.interp(x, s["t"], s["total"])) if s["t"] else 0.0
         cost = float(np.interp(x, s["t"], s["spend"])) if s["t"] else 0.0
         ha, dx = ("right", -9) if x > 0.18 * total else ("left", 9)
-        tx.annotate(f"{c}/{n_total}\n${cost:.1f} · {tok / 1e6:.1f}M", (x, levels[li]),
+        tx.annotate(f"{c}/{n_total}\n${cost:.1f} · {S.fmt_tokens(tok)}", (x, levels[li]),
                     xycoords=("data", "axes fraction"), xytext=(dx, -4), textcoords="offset points",
                     ha=ha, va="top", fontsize=9.5 * fs, fontweight="bold", color=S.GOLDLAB, zorder=22,
                     bbox=dict(boxstyle="round,pad=0.30", fc="#fdf6e6", ec=S.GOLD, lw=1.2, alpha=1.0))
 
 
 def _chip(ax, traj, *, y=1.045, fs=1.0):
-    tok = (traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens) / 1e6
+    tok = traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens
     fin = traj.final_tests()
     n_total = traj.tests_total()
     cost = _fmt_cost(traj.final_cost_usd, provisional=traj.provisional)
-    txt = (f"{traj.duration_s / 60.0:.0f} min active   ·   {cost}   ·   {tok:.0f}M tok   ·   "
-           f"{traj.num_rounds} rounds   ·   final {fin}/{n_total}")
+    n_rounds = traj.num_rounds
+    txt = (f"{S.fmt_duration(traj.duration_s)} active   ·   {cost}   ·   "
+           f"{S.fmt_tokens(tok)} tok   ·   "
+           f"{n_rounds} round{'' if n_rounds == 1 else 's'}   ·   final {fin}/{n_total}")
     ax.text(1.0, y, txt, transform=ax.transAxes, fontsize=11.5 * fs, color=S.INK,
             va="bottom", ha="right", zorder=11,
             bbox=dict(boxstyle="round,pad=0.32", fc="white", ec="#d9cfc0", lw=1.0))
@@ -280,10 +282,10 @@ def plot_cost_vs_time(trajs, labels=None):
         ax.plot(s["t"], s["spend"], color=col, lw=4.2, ls=ls, zorder=5, solid_capstyle="round")
         xe = s["t"][-1] if s["t"] else 0.0
         ye = s["spend"][-1] if s["spend"] else 0.0
-        tok = (traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens) / 1e6
+        tok = traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens
         ax.scatter([xe], [ye], s=230, color=col, ec=S.INK, lw=1.8, zorder=7, marker=mk)
         ax.annotate(f"{_fmt_cost(traj.final_cost_usd, provisional=traj.provisional, ref=ymax)}"
-                    f" · {tok:.0f}M", (xe, ye),
+                    f" · {S.fmt_tokens(tok)}", (xe, ye),
                     xytext=(0, 18), textcoords="offset points", color=col, fontsize=19,
                     fontweight="bold", va="bottom", ha="center", zorder=9,
                     path_effects=S._HALO_TXT(3.8))
