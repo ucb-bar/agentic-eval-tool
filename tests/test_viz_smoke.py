@@ -54,12 +54,17 @@ def test_labels_do_not_round_a_real_measurement_to_zero():
 
 
 # --------------------------------------------------------------------- rate panels
-def _bare_traj(run_id="chia-like", *, cache_read=0.0, cache_creation=0.0, bands=None):
-    """A trajectory shaped like chia's aet sink emits one: points, no tools, no tests."""
+def _bare_traj(run_id="chia-like", *, cache_read=0.0, cache_creation=0.0, bands=None,
+               cache_total=None):
+    """A trajectory shaped like chia's aet sink emits one: points, no tools, no tests.
+
+    ``cache_total`` defaults to read+creation; pass it explicitly to model a source that
+    recorded the sum but not the split, which is what the pre-fix sink produced."""
     from aet.trajectory.model import RunTrajectory, TrajectoryPoint
+    total = (cache_read + cache_creation) if cache_total is None else cache_total
     pts = [TrajectoryPoint(t_s=float(i) * 10.0,
                            cum_input_tokens=10.0 * (i + 1), cum_output_tokens=80.0 * (i + 1),
-                           cum_cache_tokens=(cache_read + cache_creation) * (i + 1),
+                           cum_cache_tokens=total * (i + 1),
                            cum_cache_read_tokens=cache_read * (i + 1),
                            cum_cache_creation_tokens=cache_creation * (i + 1),
                            cum_cost_usd=0.01 * (i + 1))
@@ -67,8 +72,7 @@ def _bare_traj(run_id="chia-like", *, cache_read=0.0, cache_creation=0.0, bands=
     return RunTrajectory(run_id=run_id, duration_s=70.0, num_rounds=1, points=pts,
                          bands=list(bands or []),
                          final_input_tokens=80.0, final_output_tokens=640.0,
-                         final_cache_tokens=(cache_read + cache_creation) * 8,
-                         final_cost_usd=0.08)
+                         final_cache_tokens=total * 8, final_cost_usd=0.08)
 
 
 def _texts(fig):
@@ -133,8 +137,8 @@ def test_split_cache_separates_the_two_classes_on_the_rate_axis():
 def test_split_cache_falls_back_when_the_source_recorded_only_the_sum():
     """Asking for a split a run does not carry must draw the sum, not two lines flat at zero."""
     from aet.viz.comparison import plot_rate_panels
-    fig = plot_rate_panels([_bare_traj(cache_read=0.0, cache_creation=0.0)], ["nosplit"],
-                           split_cache=True)
+    fig = plot_rate_panels([_bare_traj(cache_read=0.0, cache_creation=0.0,
+                                       cache_total=18000.0)], ["nosplit"], split_cache=True)
     labels = {t.get_text() for lg in fig.legends for t in lg.get_texts()}
     assert "rate cache" in labels and "rate cache read" not in labels
     plt.close(fig)
@@ -163,4 +167,20 @@ def test_no_milestone_legend_entry_without_milestones():
     fig = plot_rate_panels([_bare_traj()], ["chia-cold"])
     labels = {t.get_text() for lg in fig.legends for t in lg.get_texts()}
     assert "test-pass milestone" not in labels
+    plt.close(fig)
+
+
+def test_the_rate_legend_names_only_lines_that_were_drawn():
+    """A run too short to differentiate has no rate at all — rate_series needs four points.
+    A key listing four series over an empty rate axis describes a different run."""
+    from aet.trajectory.model import RunTrajectory, TrajectoryPoint
+    from aet.viz.comparison import plot_rate_panels
+    short = RunTrajectory(run_id="short", duration_s=20.0, num_rounds=1,
+                          points=[TrajectoryPoint(t_s=float(i) * 10.0,
+                                                  cum_input_tokens=10.0 * (i + 1),
+                                                  cum_output_tokens=20.0 * (i + 1))
+                                  for i in range(3)])
+    fig = plot_rate_panels([short], ["short"])
+    labels = {t.get_text() for lg in fig.legends for t in lg.get_texts()}
+    assert not any(l.startswith("rate ") for l in labels)
     plt.close(fig)

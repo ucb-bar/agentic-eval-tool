@@ -77,18 +77,26 @@ def _has_cache_split(traj) -> bool:
     return any(p.cum_cache_read_tokens or p.cum_cache_creation_tokens for p in traj.points)
 
 
-def _rate_line_handles(trajs, split_cache):
-    """Legend entries matching what :func:`_rate_lines` actually drew."""
-    hs = [Line2D([0], [0], color=S.L_INPUT, lw=3.2, label="rate input"),
-          Line2D([0], [0], color=S.L_OUTPUT, lw=3.2, label="rate output")]
-    if split_cache and any(_has_cache_split(t) for t in trajs):
-        hs += [Line2D([0], [0], color=S.L_CACHE_READ, lw=3.2, ls=(0, (5, 2)),
-                      label="rate cache read"),
-               Line2D([0], [0], color=S.L_CACHE_WRITE, lw=3.2, ls=(0, (1, 2)),
-                      label="rate cache write")]
-    else:
-        hs.append(Line2D([0], [0], color=S.L_CACHE, lw=3.2, ls=(0, (5, 2)), label="rate cache"))
-    return hs
+#: Legend entry per rate series: (colour, linestyle, label). Keyed by the series name
+#: :func:`_rate_lines` reports drawing, so the key can never advertise an absent line.
+_RATE_LEGEND = {
+    "input":          (S.L_INPUT, "-", "rate input"),
+    "output":         (S.L_OUTPUT, "-", "rate output"),
+    "cache":          (S.L_CACHE, (0, (5, 2)), "rate cache"),
+    "cache_read":     (S.L_CACHE_READ, (0, (5, 2)), "rate cache read"),
+    "cache_creation": (S.L_CACHE_WRITE, (0, (1, 2)), "rate cache write"),
+}
+
+
+def _rate_line_handles(drawn):
+    """Legend entries for exactly the series :func:`_rate_lines` drew.
+
+    Built from what was drawn rather than from what was asked for. A short run has no
+    derivable rate at all — ``rate_series`` needs four points — so a figure can legitimately
+    contain no rate lines, and a key listing four of them would be describing another run.
+    """
+    return [Line2D([0], [0], color=c, lw=3.2, ls=ls, label=lab)
+            for name, (c, ls, lab) in _RATE_LEGEND.items() if name in drawn]
 
 
 def _share_stack(ax, traj, *, band_alpha=0.40):
@@ -122,20 +130,24 @@ def _rate_lines(axT, traj, *, fs=1.0, split_cache=False):
                   ("cache_creation", S.L_CACHE_WRITE, (0, (1, 2)))]
     else:
         lines += [("cache", S.L_CACHE, (0, (5, 2)))]
+    drawn = set()
     for series, col, ls in lines:
         t, r = rate_series(traj, series)
         # An identically-zero series is omitted, not drawn at the log floor. clip(r, 1, ...) is
         # what keeps a log axis drawable, but it turns a true zero into an apparent 1 tok/min —
         # so the warm arm, which writes no cache at all, would show a cache-write rate it never had.
+        # A run with fewer than 4 points has no derivable rate at all and lands here too.
         if not np.any(r > 0):
             continue
         axT.plot(t, np.clip(r, 1, None), color=col, lw=3.2 * fs, ls=ls, zorder=8,
                  path_effects=S.LHALO)
+        drawn.add(series)
     axT.set_yscale("log")
     axT.set_ylabel("token rate (tok/min, log)", fontsize=13 * fs)
     axT.tick_params(labelsize=10 * fs)
     axT.spines["top"].set_visible(False)
     axT.spines["right"].set_color(S.INK)
+    return drawn
 
 
 def _spend_axis(ax, traj, *, outward=62, fs=1.0):
@@ -250,7 +262,7 @@ def _panel_rate(ax, traj, label, last, *, show_spend=False, show_milestones=True
     S.style_ax(ax, grid=None)
     _share_stack(ax, traj)
     axT = ax.twinx()
-    _rate_lines(axT, traj, fs=fs, split_cache=split_cache)
+    drawn = _rate_lines(axT, traj, fs=fs, split_cache=split_cache)
     axfront = _spend_axis(ax, traj, fs=fs) if show_spend else axT
     _round_dividers(ax, traj, topax=axfront, fs=fs, labels=round_labels)
     if show_milestones:
@@ -264,6 +276,7 @@ def _panel_rate(ax, traj, label, last, *, show_spend=False, show_milestones=True
     if last:
         pad = 54 if scale_bar_minutes else 16
         ax.set_xlabel("Time (min)   —   own scale per arm", fontsize=15 * fs, labelpad=pad)
+    return drawn
 
 
 def _labels_for(trajs, labels):
@@ -301,16 +314,17 @@ def plot_rate_panels(trajs, labels=None, *, independent_scales=True, scale_bar_m
     bar_m = scale_bar_minutes if independent_scales else 0
     fig, axes = plt.subplots(n, 1, figsize=(19, figh), squeeze=False)
     axes = [a[0] for a in axes]
+    drawn_series: set = set()
     fig.subplots_adjust(left=0.06, right=0.88, top=1 - 0.9 / figh, bottom=1.9 / figh, hspace=0.6)
     for i, (ax, traj) in enumerate(zip(axes, trajs)):
-        _panel_rate(ax, traj, labs[i], i == len(trajs) - 1, show_spend=show_spend,
-                    show_milestones=show_milestones, scale_bar_minutes=bar_m, fs=1.35,
-                    split_cache=split_cache)
+        drawn_series |= _panel_rate(ax, traj, labs[i], i == len(trajs) - 1,
+                                    show_spend=show_spend, show_milestones=show_milestones,
+                                    scale_bar_minutes=bar_m, fs=1.35, split_cache=split_cache)
     # Only advertise activity lanes that something actually drew. The legend used to list all five
     # unconditionally, so a run with no tool events produced a five-entry key over a blank axis.
     drawn = {b.category for t in trajs for b in t.bands}
     handles = [Patch(fc=S.ACT_COL[a], alpha=0.4, label=S.ACT_LAB[a]) for a in ACTS if a in drawn]
-    handles += _rate_line_handles(trajs, split_cache)
+    handles += _rate_line_handles(drawn_series)
     if show_milestones and any(t.milestones for t in trajs):
         handles.append(Line2D([0], [0], color=S.GOLD, lw=2.6, ls=(0, (4, 3)),
                               label="test-pass milestone"))
