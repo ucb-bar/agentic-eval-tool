@@ -319,7 +319,7 @@ def main() -> None:
                         help="Hide the cumulative-spend twin axis")
     p_plot.add_argument("--split-cache", dest="split_cache", action="store_true", default=False,
                         help="Draw cache reads and cache writes as separate lines instead of "
-                             "their sum (--kind trajectory only)")
+                             "their sum (--kind trajectory and rate-panels)")
     p_plot.add_argument("--dpi", type=int, default=200, help="Output DPI (default: 200)")
     p_plot.set_defaults(func=_cmd_plot)
 

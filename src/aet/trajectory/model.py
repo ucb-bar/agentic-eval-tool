@@ -206,15 +206,22 @@ class RunTrajectory:
         return sorted(((m.t_s / 60.0, m.n_passed) for m in self.milestones), key=lambda x: x[0])
 
     # ------------------------------------------------------------------ tests-over-time
-    def tests_total(self) -> int:
-        """The '/N' denominator for tests-passing (e.g. 20). Milestones win, else round verdicts."""
+    def tests_total(self) -> int | None:
+        """The '/N' denominator for tests-passing (e.g. 20). Milestones win, else round verdicts.
+
+        ``None`` when this run recorded no test count at all — which is not the same as a run that
+        scored 0 out of something. This used to return a literal ``20`` in that case, and every
+        caller rendered it: a run from a source that records no tests (an LLM-call trajectory, say)
+        drew a chip reading ``final 0/20``, asserting a denominator nothing had measured. Callers
+        must omit the fraction rather than substitute a number of their own.
+        """
         for m in self.milestones:
             if m.n_total:
                 return int(m.n_total)
         for r in reversed(self.rounds):
             if r.n_total:
                 return int(r.n_total)
-        return 20
+        return None
 
     def tests_steps(self) -> tuple[list[float], list[int]]:
         """(minutes, n_passing) non-decreasing step series over the run.

@@ -124,6 +124,9 @@ ACT_LAB = {"think": "thinking", "read": "reading", "write": "writing code",
            "bash": "bash / shell", "tool": "tool wait"}
 # token-line tones
 L_INPUT, L_OUTPUT, L_CACHE, L_TOTAL, L_SPEND = SAGE, NAVY, SLATE, INK, "#4B3F6E"
+# The two cache classes bill 12.5x apart, so every figure that separates them must use the
+# same pair of tones. Named here rather than spelled out per module.
+L_CACHE_READ, L_CACHE_WRITE = L_CACHE, MAUVE
 GOLDLAB = "#7a6a40"
 
 # cream text-halo so labels read over lines (port of the reference _HALO_TXT / LHALO)

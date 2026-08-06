@@ -85,8 +85,20 @@ def _cmd_plot(args) -> None:
     trajs = [main_traj] + [_load_trajectory(Path(p)) for p in (args.comparison or [])]
     labels = [t.run_id for t in trajs]
 
+    # --split-cache is honoured by both the single-run figure and the rate panels, so the
+    # "you asked for a split this run does not carry" warning is checked once for both.
+    split_cache = getattr(args, "split_cache", False)
+    if split_cache and kind in ("trajectory", "rate-panels"):
+        if not any(p.cum_cache_read_tokens or p.cum_cache_creation_tokens
+                   for t in trajs for p in t.points):
+            # Two lines flat at zero look like a measurement of "no cache activity" rather than
+            # like missing data, so say which it is instead of drawing it silently.
+            print("[aet] warning: --split-cache requested but this trajectory carries no "
+                  "cache read/creation split (both series are zero); the source recorded only "
+                  "the cache total", file=sys.stderr)
+
     if kind == "rate-panels":
-        fig = plot_rate_panels(trajs, labels)
+        fig = plot_rate_panels(trajs, labels, split_cache=split_cache)
     elif kind == "cost-vs-time":
         fig = plot_cost_vs_time(trajs, labels)
     elif kind == "tests-facets":
@@ -95,14 +107,6 @@ def _cmd_plot(args) -> None:
         from aet.viz.trajectory_plot import plot_comparison
         fig = plot_comparison(trajs, log_tokens=not args.linear_tokens)
     else:
-        split_cache = getattr(args, "split_cache", False)
-        if split_cache and not any(p.cum_cache_read_tokens or p.cum_cache_creation_tokens
-                                   for p in main_traj.points):
-            # Two lines flat at zero look like a measurement of "no cache activity" rather than
-            # like missing data, so say which it is instead of drawing it silently.
-            print("[aet] warning: --split-cache requested but this trajectory carries no "
-                  "cache read/creation split (both series are zero); the source recorded only "
-                  "the cache total", file=sys.stderr)
         fig = plot_trajectory(main_traj, log_tokens=not args.linear_tokens,
                               show_spend=not args.no_spend, split_cache=split_cache)
 

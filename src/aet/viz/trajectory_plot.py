@@ -74,9 +74,9 @@ def plot_trajectory(traj: RunTrajectory, *, ax=None, log_tokens: bool = True,
         ax.plot(t, s["output"], color=S.L_OUTPUT, lw=2.4, label="output tokens", zorder=5)
         ax.plot(t, s["input"], color=S.L_INPUT, lw=2.0, label="input tokens", zorder=5)
         if split_cache:
-            ax.plot(t, s["cache_read"], color=S.L_CACHE, lw=1.6, ls=(0, (5, 2)),
+            ax.plot(t, s["cache_read"], color=S.L_CACHE_READ, lw=1.6, ls=(0, (5, 2)),
                     label="cache read", zorder=4)
-            ax.plot(t, s["cache_creation"], color=S.MAUVE, lw=1.6, ls=(0, (1, 1.5)),
+            ax.plot(t, s["cache_creation"], color=S.L_CACHE_WRITE, lw=1.6, ls=(0, (1, 1.5)),
                     label="cache creation", zorder=4)
         else:
             ax.plot(t, s["cache"], color=S.L_CACHE, lw=1.6, ls=(0, (5, 2)),

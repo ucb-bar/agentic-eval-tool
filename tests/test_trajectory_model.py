@@ -101,4 +101,21 @@ def test_tests_steps_empty_progression_degrades():
     t = RunTrajectory(run_id="x", duration_s=120.0)   # no milestones, no round verdicts
     xs, ys = t.tests_steps()
     assert ys == [0, 0] and xs == [0.0, 2.0]
-    assert t.final_tests() == 0 and t.tests_total() == 20
+    assert t.final_tests() == 0
+
+
+def test_a_run_with_no_test_record_has_no_denominator():
+    """``None``, not 20.
+
+    A run from a source that scores nothing (an LLM-call trajectory, say) used to report a
+    denominator of 20, and the figure chip rendered "final 0/20" — a score against a suite size
+    nothing had measured. "No tests recorded" and "0 of 20 passed" are different facts.
+    """
+    assert RunTrajectory(run_id="x", duration_s=120.0).tests_total() is None
+
+
+def test_a_zero_n_total_is_still_no_record():
+    """A verdict carrying n_total=0 must not be mistaken for a recorded suite of size 0."""
+    t = RunTrajectory(run_id="x", duration_s=60.0, num_rounds=1,
+                      rounds=[RoundBoundary(0, 0.0, 60.0, n_passed=0, n_total=0)])
+    assert t.tests_total() is None

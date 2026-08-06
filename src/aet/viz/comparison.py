@@ -72,7 +72,35 @@ def rate_series(traj: RunTrajectory, series: str = "input", win: int | None = No
 
 
 # --------------------------------------------------------------------- panel pieces
+def _has_cache_split(traj) -> bool:
+    """True when the source recorded read/creation separately rather than only their sum."""
+    return any(p.cum_cache_read_tokens or p.cum_cache_creation_tokens for p in traj.points)
+
+
+def _rate_line_handles(trajs, split_cache):
+    """Legend entries matching what :func:`_rate_lines` actually drew."""
+    hs = [Line2D([0], [0], color=S.L_INPUT, lw=3.2, label="rate input"),
+          Line2D([0], [0], color=S.L_OUTPUT, lw=3.2, label="rate output")]
+    if split_cache and any(_has_cache_split(t) for t in trajs):
+        hs += [Line2D([0], [0], color=S.L_CACHE_READ, lw=3.2, ls=(0, (5, 2)),
+                      label="rate cache read"),
+               Line2D([0], [0], color=S.L_CACHE_WRITE, lw=3.2, ls=(0, (1, 2)),
+                      label="rate cache write")]
+    else:
+        hs.append(Line2D([0], [0], color=S.L_CACHE, lw=3.2, ls=(0, (5, 2)), label="rate cache"))
+    return hs
+
+
 def _share_stack(ax, traj, *, band_alpha=0.40):
+    """Stack the activity lanes. A run with no bands gets no axis label.
+
+    Labelling an empty 0-1 axis "activity share" told the reader a quantity had been measured and
+    come out flat. A source that records no tool events (chia's aet sink, for one) has no activity
+    to share out, and the figure must not imply otherwise."""
+    if not traj.bands:
+        ax.set_ylim(0, 1)
+        ax.set_yticks([])
+        return
     g, sh = activity_share(traj)
     ax.stackplot(g, *[sh[a] for a in ACTS], colors=[S.ACT_COL[a] for a in ACTS],
                  alpha=band_alpha, zorder=1)
@@ -80,10 +108,29 @@ def _share_stack(ax, traj, *, band_alpha=0.40):
     ax.set_ylabel("activity share", fontsize=13)
 
 
-def _rate_lines(axT, traj, *, fs=1.0):
-    for series, col in (("input", S.L_INPUT), ("output", S.L_OUTPUT)):
+def _rate_lines(axT, traj, *, fs=1.0, split_cache=False):
+    """Draw the token-rate lines: input, output, and the cache class(es).
+
+    Cache is here because leaving it out was a defect, not a simplification. ``rate_series`` has
+    always accepted ``"cache"``; this caller drew input and output alone, so on a cache-heavy run
+    the panel labelled "token rate" plotted the minority of the tokens — 696 of 152,088 on the
+    reference chia run. Cache reads and writes bill 12.5x apart, so ``split_cache`` separates them
+    when the source recorded the split."""
+    lines = [("input", S.L_INPUT, "-"), ("output", S.L_OUTPUT, "-")]
+    if split_cache and _has_cache_split(traj):
+        lines += [("cache_read", S.L_CACHE_READ, (0, (5, 2))),
+                  ("cache_creation", S.L_CACHE_WRITE, (0, (1, 2)))]
+    else:
+        lines += [("cache", S.L_CACHE, (0, (5, 2)))]
+    for series, col, ls in lines:
         t, r = rate_series(traj, series)
-        axT.plot(t, np.clip(r, 1, None), color=col, lw=3.2 * fs, zorder=8, path_effects=S.LHALO)
+        # An identically-zero series is omitted, not drawn at the log floor. clip(r, 1, ...) is
+        # what keeps a log axis drawable, but it turns a true zero into an apparent 1 tok/min —
+        # so the warm arm, which writes no cache at all, would show a cache-write rate it never had.
+        if not np.any(r > 0):
+            continue
+        axT.plot(t, np.clip(r, 1, None), color=col, lw=3.2 * fs, ls=ls, zorder=8,
+                 path_effects=S.LHALO)
     axT.set_yscale("log")
     axT.set_ylabel("token rate (tok/min, log)", fontsize=13 * fs)
     axT.tick_params(labelsize=10 * fs)
@@ -153,7 +200,8 @@ def _milestones(ax, traj, *, topax=None, fs=1.0, labels=True):
         tok = float(np.interp(x, s["t"], s["total"])) if s["t"] else 0.0
         cost = float(np.interp(x, s["t"], s["spend"])) if s["t"] else 0.0
         ha, dx = ("right", -9) if x > 0.18 * total else ("left", 9)
-        tx.annotate(f"{c}/{n_total}\n${cost:.1f} · {S.fmt_tokens(tok)}", (x, levels[li]),
+        frac = f"{c}/{n_total}" if n_total is not None else f"{c}"
+        tx.annotate(f"{frac}\n${cost:.1f} · {S.fmt_tokens(tok)}", (x, levels[li]),
                     xycoords=("data", "axes fraction"), xytext=(dx, -4), textcoords="offset points",
                     ha=ha, va="top", fontsize=9.5 * fs, fontweight="bold", color=S.GOLDLAB, zorder=22,
                     bbox=dict(boxstyle="round,pad=0.30", fc="#fdf6e6", ec=S.GOLD, lw=1.2, alpha=1.0))
@@ -161,13 +209,16 @@ def _milestones(ax, traj, *, topax=None, fs=1.0, labels=True):
 
 def _chip(ax, traj, *, y=1.045, fs=1.0):
     tok = traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens
-    fin = traj.final_tests()
     n_total = traj.tests_total()
     cost = _fmt_cost(traj.final_cost_usd, provisional=traj.provisional)
     n_rounds = traj.num_rounds
-    txt = (f"{S.fmt_duration(traj.duration_s)} active   ·   {cost}   ·   "
-           f"{S.fmt_tokens(tok)} tok   ·   "
-           f"{n_rounds} round{'' if n_rounds == 1 else 's'}   ·   final {fin}/{n_total}")
+    parts = [f"{S.fmt_duration(traj.duration_s)} active", cost, f"{S.fmt_tokens(tok)} tok",
+             f"{n_rounds} round{'' if n_rounds == 1 else 's'}"]
+    # Only claim a score when one was recorded. A run with no test record used to render
+    # "final 0/20" here, against a denominator nothing had measured.
+    if n_total is not None:
+        parts.append(f"final {traj.final_tests()}/{n_total}")
+    txt = "   ·   ".join(parts)
     ax.text(1.0, y, txt, transform=ax.transAxes, fontsize=11.5 * fs, color=S.INK,
             va="bottom", ha="right", zorder=11,
             bbox=dict(boxstyle="round,pad=0.32", fc="white", ec="#d9cfc0", lw=1.0))
@@ -195,11 +246,11 @@ def _scale_bar(ax, traj, *, minutes=20, y=-0.185, fs=1.0, color=S.BLUE):
 
 
 def _panel_rate(ax, traj, label, last, *, show_spend=False, show_milestones=True,
-                round_labels=True, scale_bar_minutes=20, fs=1.0):
+                round_labels=True, scale_bar_minutes=20, fs=1.0, split_cache=False):
     S.style_ax(ax, grid=None)
     _share_stack(ax, traj)
     axT = ax.twinx()
-    _rate_lines(axT, traj, fs=fs)
+    _rate_lines(axT, traj, fs=fs, split_cache=split_cache)
     axfront = _spend_axis(ax, traj, fs=fs) if show_spend else axT
     _round_dividers(ax, traj, topax=axfront, fs=fs, labels=round_labels)
     if show_milestones:
@@ -235,7 +286,7 @@ def _nice_scale_bar(trajs) -> float:
 
 
 def plot_rate_panels(trajs, labels=None, *, independent_scales=True, scale_bar_minutes=None,
-                     show_spend=False, show_milestones=True):
+                     show_spend=False, show_milestones=True, split_cache=False):
     """N per-arm token-rate panels, each on its own time scale with a fixed-duration ruler.
 
     ``scale_bar_minutes`` defaults to an auto-picked 'nice' length that fits the shortest run (so it
@@ -253,11 +304,14 @@ def plot_rate_panels(trajs, labels=None, *, independent_scales=True, scale_bar_m
     fig.subplots_adjust(left=0.06, right=0.88, top=1 - 0.9 / figh, bottom=1.9 / figh, hspace=0.6)
     for i, (ax, traj) in enumerate(zip(axes, trajs)):
         _panel_rate(ax, traj, labs[i], i == len(trajs) - 1, show_spend=show_spend,
-                    show_milestones=show_milestones, scale_bar_minutes=bar_m, fs=1.35)
-    handles = [Patch(fc=S.ACT_COL[a], alpha=0.4, label=S.ACT_LAB[a]) for a in ACTS] + [
-        Line2D([0], [0], color=S.L_INPUT, lw=3.2, label="rate input"),
-        Line2D([0], [0], color=S.L_OUTPUT, lw=3.2, label="rate output")]
-    if show_milestones:
+                    show_milestones=show_milestones, scale_bar_minutes=bar_m, fs=1.35,
+                    split_cache=split_cache)
+    # Only advertise activity lanes that something actually drew. The legend used to list all five
+    # unconditionally, so a run with no tool events produced a five-entry key over a blank axis.
+    drawn = {b.category for t in trajs for b in t.bands}
+    handles = [Patch(fc=S.ACT_COL[a], alpha=0.4, label=S.ACT_LAB[a]) for a in ACTS if a in drawn]
+    handles += _rate_line_handles(trajs, split_cache)
+    if show_milestones and any(t.milestones for t in trajs):
         handles.append(Line2D([0], [0], color=S.GOLD, lw=2.6, ls=(0, (4, 3)),
                               label="test-pass milestone"))
     handles.append(Line2D([0], [0], color=RND_C, lw=1.3, ls=(0, (3, 2)), label="round"))
@@ -319,7 +373,7 @@ def plot_tests_facets(trajs, labels=None):
         xs, ys = traj.tests_steps()
         # each lane scales to its OWN suite size (arms may have different N: 8 vs 32 vs 182), so a
         # small suite isn't dwarfed by a large one on a shared y-axis
-        ntot = max(traj.tests_total(), 1)
+        ntot = max(traj.tests_total() or 0, 1)
         ax.fill_between(xs, 0, ys, step="post", color=col, alpha=0.18, zorder=2)
         ax.step(xs, ys, where="post", color=col, lw=5.0, zorder=5, solid_capstyle="round")
         rises = [k for k in range(1, len(ys)) if ys[k] != ys[k - 1]]
@@ -332,7 +386,9 @@ def plot_tests_facets(trajs, labels=None):
         ax.tick_params(labelsize=20)
         ax.set_ylabel("tests", fontsize=24)
         ax.set_title(lab, loc="left", color=col, fontsize=26, fontweight="bold", pad=10)
-        ax.text(xs[-1] + 0.012 * xmax, ys[-1], f"{ys[-1]}/{traj.tests_total()}", color=col,
+        n_total = traj.tests_total()
+        endpoint = f"{ys[-1]}/{n_total}" if n_total is not None else f"{ys[-1]}"
+        ax.text(xs[-1] + 0.012 * xmax, ys[-1], endpoint, color=col,
                 fontsize=23, fontweight="bold", va="center", ha="left",
                 path_effects=S._HALO_TXT(4.0))
         if i == n - 1:
