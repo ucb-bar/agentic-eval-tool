@@ -14,6 +14,7 @@ from aet.isolation import (
     file_access_ledger,
     wrap_command,
 )
+from aet.isolation.sandbox import DNS_DIR
 
 
 def _txn(*tool_uses):
@@ -111,6 +112,116 @@ class TestSandboxArgv:
         ).stdout
         assert "INPUT_OK" in out
         assert "ANSWERS_MASKED" in out
+
+
+class TestSandboxNetEnvGit:
+    """Three ways a filesystem allow-list leaks anyway: the network, the environment, and .git."""
+
+    def test_unshare_net_is_opt_in(self, tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        assert "--unshare-net" not in bwrap_argv(SandboxSpec(workspace=ws))
+        assert "--unshare-net" in bwrap_argv(SandboxSpec(workspace=ws, unshare_net=True))
+
+    def test_dns_bind_is_dropped_when_the_network_is_unshared(self, tmp_path):
+        """Binding the resolver stub into a netns with no interfaces resolves nothing. Leaving the
+        bind in would suggest the sandbox has networking when it does not."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        s = " ".join(bwrap_argv(SandboxSpec(workspace=ws, unshare_net=True, dns=True)))
+        assert DNS_DIR not in s
+
+    def test_clearenv_precedes_every_setenv(self, tmp_path):
+        """--clearenv after a --setenv would wipe it. Order is the whole correctness argument."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        argv = bwrap_argv(SandboxSpec(workspace=ws, clearenv=True, env_allow=["PATH", "HOME"]))
+        assert "--clearenv" in argv
+        assert all(argv.index("--clearenv") < i
+                   for i, a in enumerate(argv) if a == "--setenv")
+
+    def test_clearenv_exports_only_what_was_named(self, tmp_path, monkeypatch):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        monkeypatch.setenv("KEEP_ME", "yes")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+        argv = bwrap_argv(SandboxSpec(workspace=ws, clearenv=True, env_allow=["KEEP_ME"]))
+        s = " ".join(argv)
+        assert "--setenv KEEP_ME yes" in s
+        assert "sk-secret" not in s, "an unnamed variable must not survive --clearenv"
+
+    def test_clearenv_skips_names_that_are_not_set(self, tmp_path, monkeypatch):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        monkeypatch.delenv("DEFINITELY_UNSET", raising=False)
+        argv = bwrap_argv(SandboxSpec(workspace=ws, clearenv=True, env_allow=["DEFINITELY_UNSET"]))
+        assert "DEFINITELY_UNSET" not in argv, "exporting an empty value is not the same as absence"
+
+    def test_mask_git_covers_workspace_and_granted_roots(self, tmp_path):
+        ws = tmp_path / "ws"
+        (ws / ".git").mkdir(parents=True)
+        corpus = tmp_path / "corpus"
+        (corpus / ".git").mkdir(parents=True)
+        argv = bwrap_argv(SandboxSpec(workspace=ws, allow=[corpus], mask_git=True))
+        s = " ".join(argv)
+        assert f"--tmpfs {ws / '.git'}" in s
+        assert f"--tmpfs {corpus / '.git'}" in s
+
+    def test_mask_git_finds_nested_submodules(self, tmp_path):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        corpus = tmp_path / "corpus"
+        (corpus / "third_party" / "dep" / ".git").mkdir(parents=True)
+        s = " ".join(bwrap_argv(SandboxSpec(workspace=ws, allow=[corpus], mask_git=True)))
+        assert f"--tmpfs {corpus / 'third_party' / 'dep' / '.git'}" in s
+
+    def test_mask_git_is_applied_after_the_allow_binds(self, tmp_path):
+        """Same deny-wins ordering as `deny`: a granted repo root must not re-expose its history."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        corpus = tmp_path / "corpus"
+        (corpus / ".git").mkdir(parents=True)
+        argv = bwrap_argv(SandboxSpec(workspace=ws, allow=[corpus], mask_git=True))
+        assert argv.index(str(corpus / ".git")) > argv.index(str(corpus))
+
+    def test_mask_git_is_off_by_default(self, tmp_path):
+        ws = tmp_path / "ws"
+        (ws / ".git").mkdir(parents=True)
+        assert str(ws / ".git") not in bwrap_argv(SandboxSpec(workspace=ws))
+
+    @pytest.mark.skipif(not shutil.which("bwrap"), reason="bwrap not available")
+    def test_functional_git_history_is_unreadable(self, tmp_path):
+        """The failure this exists to prevent: a file withheld from the working tree, still readable
+        from the history of a granted checkout."""
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        corpus = tmp_path / "corpus"
+        (corpus / ".git").mkdir(parents=True)
+        (corpus / ".git" / "answer").write_text("42")
+        (corpus / "input.txt").write_text("ok")
+        spec = SandboxSpec(workspace=ws, allow=[corpus], mask_git=True)
+        probe = (
+            f'test -e {corpus}/input.txt && echo INPUT_OK; '
+            f'test "$(ls {corpus}/.git 2>/dev/null | wc -l)" = 0 && echo GIT_MASKED'
+        )
+        out = subprocess.run(
+            ["bash", "-c", wrap_command(probe, spec)], capture_output=True, text=True, timeout=60
+        ).stdout
+        assert "INPUT_OK" in out
+        assert "GIT_MASKED" in out
+
+    @pytest.mark.skipif(not shutil.which("bwrap"), reason="bwrap not available")
+    def test_functional_env_is_empty_but_for_the_allowlist(self, tmp_path, monkeypatch):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        monkeypatch.setenv("SECRET_TOKEN", "sk-do-not-leak")
+        spec = SandboxSpec(workspace=ws, clearenv=True, env_allow=["PATH"])
+        out = subprocess.run(
+            ["bash", "-c", wrap_command("echo TOKEN=[$SECRET_TOKEN]; test -n \"$PATH\" && echo PATH_OK", spec)],
+            capture_output=True, text=True, timeout=60,
+        ).stdout
+        assert "TOKEN=[]" in out
+        assert "PATH_OK" in out
 
 
 class TestAudit:

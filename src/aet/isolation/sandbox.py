@@ -16,17 +16,34 @@ This builds a ``bwrap`` argv that gives exactly that — an *allow-list* filesys
   * ``unsetenv``     cleared in the sandbox (e.g. nested-session vars that would mis-route a child agent)
   * ``dns``          bind /run/systemd/resolve so name resolution works (``/etc/resolv.conf`` often
                      symlinks into /run, which bwrap does not bind by default)
+  * ``unshare_net``  no network namespace at all — the filesystem allow-list means nothing if the agent
+                     can fetch the same content over HTTP
+  * ``clearenv``     start from an EMPTY environment and re-export only ``env_allow``, rather than
+                     inheriting the launcher's and subtracting known-bad names
+  * ``mask_git``     tmpfs over ``.git`` directories, so history cannot serve content the working tree
+                     no longer has
 
 Nothing here is project-specific: the caller supplies the paths/patterns. Gemmini/Merlin specifics (which
 dirs are tools vs answers, the toolchain locations) live in the caller's config, not here.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_SYSTEM_DIRS = ["/usr", "/bin", "/lib", "/lib64", "/etc"]
 DNS_DIR = "/run/systemd/resolve"   # /etc/resolv.conf -> here on systemd-resolved hosts
+
+#: Enough to run a shell and a toolchain, and nothing that identifies the launcher or carries a
+#: credential. The caller adds what its tools need; the default is deliberately austere, because the
+#: point of ``clearenv`` is that a variable arrives only if someone named it.
+DEFAULT_ENV_ALLOW = ["PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL", "USER"]
+
+#: How deep to look for nested ``.git`` (submodules) under each granted root. Bounded on purpose: an
+#: unbounded rglob over a granted toolchain tree is slow enough to be noticed, and the deep case is
+#: rare enough that a caller who has one can pass it in ``deny``.
+_GIT_SCAN_DEPTH = 3
 
 
 @dataclass
@@ -45,6 +62,36 @@ class SandboxSpec:
     dns: bool = True                                         # bind the resolver stub for networking
     die_with_parent: bool = True
     unshare_pid: bool = True
+    unshare_net: bool = False                                # no network namespace (see note below)
+    clearenv: bool = False                                   # empty env, then re-export `env_allow`
+    env_allow: list[str] | None = None                       # None -> DEFAULT_ENV_ALLOW when clearenv
+    mask_git: bool = False                                   # tmpfs over .git under granted roots
+
+
+def _git_dirs(roots: list[Path]) -> list[Path]:
+    """``.git`` directories at or under each granted root, bounded to ``_GIT_SCAN_DEPTH``.
+
+    Masking these matters whenever a granted tree is a checkout: withholding a file from the working
+    tree while leaving its history readable withholds nothing. Deleting ``.git`` would work too, but
+    it mutates the caller's tree — a tmpfs mask is reversible and leaves the directory present, so a
+    tool that stats it does not take a different branch than it would outside the sandbox."""
+    found: list[Path] = []
+    for root in roots:
+        try:
+            if not root.is_dir():
+                continue
+        except PermissionError:
+            continue
+        candidates = [root / ".git"]
+        for depth in range(1, _GIT_SCAN_DEPTH + 1):
+            candidates += list(root.glob("/".join(["*"] * depth) + "/.git"))
+        for c in candidates:
+            try:
+                if c.exists() and c not in found:
+                    found.append(c)
+            except PermissionError:
+                continue
+    return found
 
 
 def _kind(p: Path) -> str:
@@ -70,6 +117,11 @@ def bwrap_argv(spec: SandboxSpec) -> list[str]:
         parts += ["--die-with-parent"]
     if spec.unshare_pid:
         parts += ["--unshare-pid"]
+    if spec.unshare_net:
+        # A filesystem allow-list is not an information boundary on its own: an agent denied a file
+        # can often fetch the same bytes from the network. Off by default because most callers want
+        # a working package index; on for anything measured.
+        parts += ["--unshare-net"]
     for d in spec.system_dirs:
         if Path(d).exists():
             parts += ["--ro-bind", d, d]
@@ -77,7 +129,9 @@ def bwrap_argv(spec: SandboxSpec) -> list[str]:
         parts += ["--tmpfs", d]
     parts += ["--bind", str(spec.workspace), str(spec.workspace)]
     parts += ["--proc", "/proc", "--dev", "/dev", "--chdir", str(spec.workspace)]
-    if spec.dns and Path(DNS_DIR).exists():
+    # Binding the resolver stub into a netns with no interfaces resolves nothing; skip it rather than
+    # leave a bind that suggests the sandbox has networking when it does not.
+    if spec.dns and not spec.unshare_net and Path(DNS_DIR).exists():
         parts += ["--ro-bind", DNS_DIR, DNS_DIR]
     for p in spec.allow:
         if _kind(Path(p)) != "missing":
@@ -94,9 +148,26 @@ def bwrap_argv(spec: SandboxSpec) -> list[str]:
     for p in spec.deny:
         if _kind(Path(p)) == "dir":
             parts += ["--tmpfs", str(p)]
+    # .git masks sit with the other deny masks: after every allow bind, so a granted repo root cannot
+    # re-expose the history a broader allow just bound.
+    if spec.mask_git:
+        roots = [Path(spec.workspace), *map(Path, spec.allow),
+                 *map(Path, spec.extra_binds), *map(Path, spec.rw_binds)]
+        for g in _git_dirs(roots):
+            parts += ["--tmpfs", str(g)]
     for f in spec.mask_files:
         if _kind(Path(f)) in ("file", "dir"):
             parts += ["--ro-bind", "/dev/null", str(f)]   # present-but-empty -> content withheld
+    # Env comes last so nothing above can be undone by it. `--clearenv` starts from empty and
+    # re-exports only what was named, which is the opposite posture from `--unsetenv`: the latter
+    # requires you to have anticipated every bad variable, the former requires you to have
+    # anticipated every needed one. Only the second failure mode is loud.
+    if spec.clearenv:
+        parts += ["--clearenv"]
+        for name in (spec.env_allow if spec.env_allow is not None else DEFAULT_ENV_ALLOW):
+            val = os.environ.get(name)
+            if val is not None:
+                parts += ["--setenv", name, val]
     for v in spec.unsetenv:
         parts += ["--unsetenv", v]
     return parts
