@@ -1,6 +1,7 @@
 """RunTrajectory data-model: construction, derived views, and round-trip serialization."""
 from aet.trajectory.model import (
-    RunTrajectory, TrajectoryPoint, ActivityBand, TestMilestone, RoundBoundary,
+    CHECKPOINT_KINDS, ActivityBand, Checkpoint, RoundBoundary, RunTrajectory, TestMilestone,
+    TrajectoryPoint,
 )
 
 
@@ -119,3 +120,61 @@ def test_a_zero_n_total_is_still_no_record():
     t = RunTrajectory(run_id="x", duration_s=60.0, num_rounds=1,
                       rounds=[RoundBoundary(0, 0.0, 60.0, n_passed=0, n_total=0)])
     assert t.tests_total() is None
+
+
+# --------------------------------------------------------------------------- checkpoints (v1.1)
+
+
+class TestCheckpoints:
+    """One-shot progress landmarks, distinct from the pass/total milestone axis.
+
+    Time-to-first-parse and time-to-first-elaboration cannot be expressed as `n_passed/n_total`
+    without abusing `scope`, and `EvalRunLogger.record_elaboration` records an iteration index
+    rather than a `t_s` — so neither reached the trajectory before this.
+    """
+
+    def _t(self) -> RunTrajectory:
+        return RunTrajectory(
+            run_id="cp",
+            checkpoints=[
+                Checkpoint(t_s=40.0, kind="first_parse", source="build_log"),
+                Checkpoint(t_s=12.0, kind="first_parse", source="build_log"),
+                Checkpoint(t_s=90.0, kind="first_module_elab", scope="atlas.mxu0"),
+            ],
+        )
+
+    def test_time_to_returns_the_first_crossing(self):
+        assert self._t().time_to("first_parse") == 12.0, "not the last, and not the one appended first"
+
+    def test_time_to_is_none_when_never_reached(self):
+        """Substituting the run duration would turn 'never got there' into 'got there at the very
+        end' — the difference between a censored observation and a slow one."""
+        assert self._t().time_to("public_all") is None
+
+    def test_time_to_is_scoped(self):
+        t = self._t()
+        assert t.time_to("first_module_elab", scope="atlas.mxu0") == 90.0
+        assert t.time_to("first_module_elab") is None, "the default scope did not reach it"
+
+    def test_the_ladder_keeps_unreached_rungs(self):
+        ladder = self._t().checkpoint_ladder()
+        assert [k for k, _ in ladder] == list(CHECKPOINT_KINDS), "order is the comparison"
+        assert dict(ladder)["first_parse"] == 12.0
+        assert dict(ladder)["full_elab"] is None
+        assert len(ladder) == len(CHECKPOINT_KINDS), "a stalled run and an unmeasured one differ"
+
+    def test_checkpoints_round_trip(self):
+        t = self._t()
+        back = RunTrajectory.from_dict(t.to_dict())
+        assert [(c.kind, c.t_s, c.scope) for c in back.checkpoints] == [
+            (c.kind, c.t_s, c.scope) for c in t.checkpoints
+        ]
+
+    def test_a_v1_0_trajectory_still_loads(self):
+        """Every trajectory written before this field existed has no `checkpoints` key."""
+        d = _sample().to_dict()
+        d.pop("checkpoints")
+        d["schema_version"] = "1.0"
+        back = RunTrajectory.from_dict(d)
+        assert back.checkpoints == []
+        assert back.milestone_series(), "the rest of the trajectory is untouched"

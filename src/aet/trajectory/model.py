@@ -2,16 +2,17 @@
 
 A ``RunTrajectory`` is the repo-agnostic record of *what an agent did over time* while
 producing a deliverable: cumulative token consumption (input / output / cache), cumulative
-cost, an activity timeline (thinking / reading / writing / bash / long tool-waits), and
-test-pass milestones from an external oracle. It is the single structure every consumer reads
-— the batch importer, the native recorder, the live monitor, and the plots.
+cost, an activity timeline (thinking / reading / writing / bash / long tool-waits), test-pass
+milestones from an external oracle, and one-shot progress checkpoints (first parse, first
+elaboration, all-public-passing). It is the single structure every consumer reads — the batch
+importer, the native recorder, the live monitor, and the plots.
 
 Design invariants:
   * **Pure stdlib, no numpy.** Every field is a plain list/scalar so this module stays a
     dependency-free core; array smoothing for plots lives in ``aet.viz``.
-  * **Append-only.** ``points``/``bands``/``milestones``/``rounds`` are grown incrementally, so
-    the exact same object is built by a completed-run importer and by a live stream, one point
-    at a time. There is one code path, not two.
+  * **Append-only.** ``points``/``bands``/``milestones``/``checkpoints``/``rounds`` are grown
+    incrementally, so the exact same object is built by a completed-run importer and by a live
+    stream, one point at a time. There is one code path, not two.
   * **Self-describing.** ``classifier_config`` is carried on the trajectory so a reader can see
     (and reproduce) how activities were categorised — the harness never hardcodes tool rules.
 """
@@ -21,7 +22,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"   # 1.1 adds `checkpoints`; 1.0 files load unchanged (absent -> [])
 
 
 @dataclass
@@ -74,6 +75,42 @@ class TestMilestone:
     source: str = ""                 # "selfcheck_log" | "qa_verdict" | ...
 
 
+#: Ordered. A run passes through these in sequence, and the ordering is what makes "time to first X"
+#: comparable across runs that never reach the same depth.
+CHECKPOINT_KINDS = (
+    "first_file",           # the agent wrote its first candidate artifact
+    "first_parse",          # something it wrote parsed
+    "first_module_elab",    # one module elaborated
+    "full_elab",            # the whole design elaborated
+    "first_public_pass",    # the first public test passed
+    "public_50",            # half the public requirements passing
+    "public_90",
+    "public_all",           # every mandatory public test passing
+)
+
+
+@dataclass
+class Checkpoint:
+    """A one-shot progress landmark at a wall time.
+
+    Distinct from ``TestMilestone``, which is a *reading* on a single pass/total axis and can move in
+    both directions. A checkpoint is a threshold crossed once: the first time the agent's output
+    parsed, the first time a module elaborated. Time-to-first-parse and time-to-first-elaboration are
+    not expressible as ``n_passed/n_total`` without abusing ``scope``, and the existing
+    ``EvalRunLogger.record_elaboration`` records an *iteration index* rather than a ``t_s``, so
+    neither lands on the trajectory today.
+
+    ``reached`` is always True for a stored checkpoint — absence is how "never reached" is
+    represented, because a checkpoint at ``t_s = None`` would sort somewhere and be plotted."""
+
+    t_s: float
+    kind: str                        # one of CHECKPOINT_KINDS (not enforced: callers may add their own)
+    scope: str = "all"               # e.g. a module_id, when the checkpoint is per-module
+    round_index: int | None = None
+    source: str = ""                 # "build_log" | "harness" | ...
+    detail: str = ""
+
+
 @dataclass
 class RoundBoundary:
     """One agent invocation ("round") — its wall span + billed totals + QA verdict."""
@@ -108,6 +145,7 @@ class RunTrajectory:
     points: list[TrajectoryPoint] = field(default_factory=list)
     bands: list[ActivityBand] = field(default_factory=list)
     milestones: list[TestMilestone] = field(default_factory=list)
+    checkpoints: list[Checkpoint] = field(default_factory=list)
     rounds: list[RoundBoundary] = field(default_factory=list)
     final_cost_usd: float = 0.0
     final_input_tokens: int = 0
@@ -137,6 +175,7 @@ class RunTrajectory:
             "points": [asdict(p) for p in self.points],
             "bands": [asdict(b) for b in self.bands],
             "milestones": [asdict(m) for m in self.milestones],
+            "checkpoints": [asdict(c) for c in self.checkpoints],
             "rounds": [asdict(r) for r in self.rounds],
         }
 
@@ -160,6 +199,8 @@ class RunTrajectory:
             points=[TrajectoryPoint(**p) for p in d.get("points", [])],
             bands=[ActivityBand(**b) for b in d.get("bands", [])],
             milestones=[TestMilestone(**m) for m in d.get("milestones", [])],
+            # .get with a default: a v1.0 trajectory has no checkpoints key and must still load.
+            checkpoints=[Checkpoint(**c) for c in d.get("checkpoints", [])],
             rounds=[RoundBoundary(**r) for r in d.get("rounds", [])],
         )
 
@@ -204,6 +245,23 @@ class RunTrajectory:
     def milestone_series(self) -> list[tuple[float, int]]:
         """(minute, n_passed) pairs, sorted by time — the gold test-pass steps."""
         return sorted(((m.t_s / 60.0, m.n_passed) for m in self.milestones), key=lambda x: x[0])
+
+    def time_to(self, kind: str, scope: str = "all") -> float | None:
+        """Seconds to the FIRST time this checkpoint was reached, or ``None`` if it never was.
+
+        ``None`` is load-bearing and must survive to the caller: a run that never elaborated has no
+        time-to-elaboration, and substituting the run duration would silently convert "never got
+        there" into "got there at the very end" — which is the difference between a censored
+        observation and a slow one."""
+        hits = [c.t_s for c in self.checkpoints if c.kind == kind and c.scope == scope]
+        return min(hits) if hits else None
+
+    def checkpoint_ladder(self, scope: str = "all") -> list[tuple[str, float | None]]:
+        """``(kind, t_s | None)`` in CHECKPOINT_KINDS order — the parse → elaborate → pass figure.
+
+        Unreached checkpoints are kept in the list with ``None`` rather than dropped, so a run that
+        stalled at parse and a run that was never measured render differently."""
+        return [(k, self.time_to(k, scope)) for k in CHECKPOINT_KINDS]
 
     # ------------------------------------------------------------------ tests-over-time
     def tests_total(self) -> int | None:

@@ -11,6 +11,8 @@ from aet.trajectory.model import (
     TrajectoryPoint,
     ActivityBand,
     TestMilestone,
+    Checkpoint,
+    CHECKPOINT_KINDS,
     RoundBoundary,
     SCHEMA_VERSION,
 )
@@ -35,6 +37,8 @@ __all__ = [
     "TrajectoryPoint",
     "ActivityBand",
     "TestMilestone",
+    "Checkpoint",
+    "CHECKPOINT_KINDS",
     "RoundBoundary",
     "SCHEMA_VERSION",
     "ActivityClassifier",
