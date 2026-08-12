@@ -3,6 +3,7 @@ from aet.core.metrics import (
     mean_std, fmt, coerce_na,
     welch_ttest, confidence_interval, effect_size,
     jaccard_similarity, sequence_edit_distance,
+    paired_deltas, wilcoxon_signed_rank, paired_bootstrap_ci, kaplan_meier,
 )
 
 
@@ -228,3 +229,116 @@ def test_sequence_edit_distance_transposition():
 def test_sequence_edit_distance_empty():
     assert sequence_edit_distance([], ["A", "B"]) == 2
     assert sequence_edit_distance(["A"], []) == 1
+
+
+# ---------------------------------------------------------------------------
+# paired comparison + survival
+# ---------------------------------------------------------------------------
+
+def test_paired_deltas_aligns_by_index():
+    assert paired_deltas([10, 20, 30], [7, 15, 28]) == ([3, 5, 2], 0)
+
+
+def test_paired_deltas_reports_what_it_dropped():
+    """A comparison over 2 of 3 seeds and one over 3 of 3 are different measurements."""
+    deltas, dropped = paired_deltas([10, None, 30], [7, 15, 28])
+    assert (deltas, dropped) == ([3, 2], 1)
+
+
+def test_paired_deltas_refuses_misaligned_input():
+    """Silently zipping to the shorter list would pair seed 0 with seed 0 and then stop, reporting
+    a comparison over a subset nobody chose."""
+    try:
+        paired_deltas([1, 2, 3], [1, 2])
+    except ValueError as e:
+        assert "align" in str(e)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_paired_deltas_rejects_bools():
+    """bool is an int in Python; a True/False column silently averaging into a duration is worse
+    than a dropped pair."""
+    deltas, dropped = paired_deltas([True, 20], [1, 15])
+    assert (deltas, dropped) == ([5], 1)
+
+
+def test_wilcoxon_flags_that_pilot_n_cannot_reach_significance():
+    """At n=3 the smallest two-sided p is 0.25, so 'p > 0.05' is arithmetic, not evidence. Without
+    this flag a pilot could report a non-significant result as an absence of effect."""
+    r = wilcoxon_signed_rank([10, 20, 30], [7, 15, 28])
+    assert r["p_value"] == 0.25
+    assert r["underpowered"] is True
+    assert r["min_achievable_p"] == 0.25
+    assert r["n_nonzero"] == 3
+
+
+def test_wilcoxon_is_not_underpowered_once_n_is_large_enough():
+    a = list(range(1, 13))
+    b = [x - 1 for x in a]
+    r = wilcoxon_signed_rank(a, b)
+    assert r["underpowered"] is False
+    assert r["p_value"] is not None and r["p_value"] < 0.05
+
+
+def test_wilcoxon_reports_median_delta_and_direction():
+    r = wilcoxon_signed_rank([10, 20, 30], [7, 15, 28])
+    assert r["median_delta"] == 3, "positive = the first arm was larger"
+
+
+def test_wilcoxon_handles_all_ties():
+    r = wilcoxon_signed_rank([5, 5, 5], [5, 5, 5])
+    assert r["n_nonzero"] == 0
+    assert r["p_value"] is None, "no non-zero pair means no test, not p=1"
+    assert r["median_delta"] == 0
+
+
+def test_paired_bootstrap_is_deterministic():
+    """A CI that moves between runs of the same analysis is not reportable."""
+    a, b = [10, 20, 30, 40], [7, 15, 28, 39]
+    assert paired_bootstrap_ci(a, b, seed=0) == paired_bootstrap_ci(a, b, seed=0)
+
+
+def test_paired_bootstrap_brackets_the_mean_delta():
+    r = paired_bootstrap_ci([10, 20, 30, 40], [7, 15, 28, 39], seed=0)
+    assert r["lower"] <= r["mean_delta"] <= r["upper"]
+    assert r["n_pairs"] == 4
+
+
+def test_paired_bootstrap_declines_a_ci_for_one_pair():
+    r = paired_bootstrap_ci([10], [7])
+    assert r["mean_delta"] == 3
+    assert r["lower"] is None and r["upper"] is None
+
+
+def test_kaplan_meier_keeps_censored_runs_in_the_risk_set():
+    """The whole reason it exists: a run that hit its budget without succeeding is neither a
+    failure nor a slow success. Dropping it biases toward the lucky runs; scoring it at the cap
+    biases the other way."""
+    km = kaplan_meier([100, 200, 300, 300], [1, 1, 0, 0])
+    assert km["n_events"] == 2 and km["n_censored"] == 2
+    assert km["at_risk"] == [4, 3], "the censored runs were at risk until their cap"
+    assert km["survival"] == [0.75, 0.5]
+
+
+def test_kaplan_meier_median_is_none_when_never_reached():
+    """'More than half never got there' is not a median, and reporting the largest duration as one
+    would assert a completion that did not happen."""
+    km = kaplan_meier([100, 500, 500], [1, 0, 0])
+    assert km["survival"] == [round(2 / 3, 6)]
+    assert km["median"] is None
+
+
+def test_kaplan_meier_all_censored_has_no_steps():
+    km = kaplan_meier([300, 300], [0, 0])
+    assert km["times"] == [] and km["survival"] == []
+    assert km["n_censored"] == 2 and km["median"] is None
+
+
+def test_kaplan_meier_refuses_misaligned_input():
+    try:
+        kaplan_meier([1, 2, 3], [1, 1])
+    except ValueError as e:
+        assert "align" in str(e)
+    else:
+        raise AssertionError("expected ValueError")
