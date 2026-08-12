@@ -26,6 +26,11 @@ class RunManifest:
     execution: dict = field(default_factory=dict)
     observability: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
+    #: {input_name: sha256 | None} for every immutable input this run was built from. Written at
+    #: init and never updated — a hash recomputed after the run would describe the wrong thing.
+    #: `aet.core.hashing.assert_comparable` refuses to aggregate runs whose values disagree, which
+    #: is what makes this a control rather than a field somebody might read.
+    input_hashes: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None or k in (
@@ -87,6 +92,7 @@ class RunManifest:
             promotion_flag=spec.promotion_flag,
             created_at=now,
             status="initialized",
+            input_hashes=dict(getattr(spec, "input_hashes", None) or {}),
             tracking={"execution_backend": spec.execution},
             execution={"backend": spec.execution},
             observability=obs,

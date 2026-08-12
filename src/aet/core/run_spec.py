@@ -43,3 +43,6 @@ class RunSpec:
     ir_version: str | None = None
     scaffold_version: str | None = None
     hidden_eval_version: str | None = None
+    #: {name: path} of the immutable inputs to hash at run start. `RunManifest.create` resolves
+    #: these into `input_hashes`; see aet.core.hashing.hash_inputs.
+    input_hashes: dict = field(default_factory=dict)
