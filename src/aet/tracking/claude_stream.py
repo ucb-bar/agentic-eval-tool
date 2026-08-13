@@ -133,6 +133,11 @@ class ClaudeStreamResult:
     turn_usage: list[TurnUsage]
     model_usage: list[ModelUsage] = field(default_factory=list)
     has_result_event: bool = False   # a terminal `result` event was seen (complete transcript)
+    #: `per_token` or `subscription`. `cost_usd` is MONEY only in the first case; on a subscription
+    #: seat the CLI still reports a dollar figure and it is what the tokens would have cost on the
+    #: API. Defaults to `subscription`, the conservative direction: counting an unclassified run as
+    #: metered would inflate reported spend and consume a budget cap no card is backing.
+    billing_mode: str = "subscription"
 
     @property
     def total_input_tokens(self) -> int:
@@ -361,6 +366,10 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
     model_usage_list: list[ModelUsage] = []
     result_text = ""
     cost_usd = 0.0
+    # Initialised here, not only inside the `result` branch: a transcript that ends without a
+    # terminal result event (a killed run, a rate-limit cut) still has to produce a result object,
+    # and a name bound only on the happy path would raise NameError on exactly those runs.
+    billing_mode = "subscription"
     num_turns = 0
     duration_ms = 0
     duration_api_ms = 0
@@ -451,7 +460,15 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
             success = (event.get("subtype") == "success") and not event.get("is_error", False)
             result_text = event.get("result", "")
             # real CLI emits total_cost_usd; test fixtures use cost_usd
+            #
+            # NOT NECESSARILY MONEY. The CLI emits this field on a subscription seat too, where it
+            # is what the tokens WOULD have cost on the API and no card is charged. `billing_mode`
+            # records which kind this is so a downstream ledger can keep them apart; summing them
+            # presents quota consumption as money, and a budget cap enforced against the sum is
+            # enforced against a number partly nobody is paying. See aet.trajectory.billing.
             cost_usd = float(event.get("total_cost_usd") or event.get("cost_usd") or 0.0)
+            from aet.trajectory.billing import billing_mode_of
+            billing_mode = billing_mode_of(event)
             num_turns = int(event.get("num_turns") or 0)
             duration_ms = int(event.get("duration_ms") or 0)
             duration_api_ms = int(event.get("duration_api_ms") or 0)
@@ -492,5 +509,6 @@ def parse_stream(stream_text: str) -> ClaudeStreamResult:
         tool_calls=list(tool_calls_by_id.values()),
         turn_usage=turn_usage,
         model_usage=model_usage_list,
+        billing_mode=billing_mode,
         has_result_event=has_result_event,
     )
