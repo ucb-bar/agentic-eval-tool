@@ -187,6 +187,7 @@ def _cmd_run(args) -> None:
         rw_binds=args.rw_binds or [],
         mask_files=args.mask_files or [],
         unsetenv=args.unsetenv or [],
+        unshare_net=getattr(args, "unshare_net", False),
         env_prefix=args.env_prefix or "",
         allow_unsandboxed=args.allow_unsandboxed,
         agent_cmd=args.agent_cmd,

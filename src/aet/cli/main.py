@@ -383,6 +383,11 @@ def main() -> None:
     p_run.add_argument("--mask-files", dest="mask_files", nargs="+", metavar="PATH", default=None,
                        help="Individual files overlaid with /dev/null — present but empty, so "
                             "withholding is not inferable from an ENOENT (per-file answer keys)")
+    p_run.add_argument("--unshare-net", dest="unshare_net", action="store_true", default=False,
+                       help="Run with NO network namespace. A filesystem allow-list is not an "
+                            "information boundary while the network is up: an agent that can reach "
+                            "the internet can fetch what the allow-list withheld and publish what "
+                            "it protected. Off by default because most agents need the API.")
     p_run.add_argument("--unsetenv", dest="unsetenv", nargs="+", metavar="VAR", default=None,
                        help="Environment variables cleared inside the sandbox (nested-session "
                             "variables that would re-route a child agent into this session)")

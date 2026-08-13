@@ -212,3 +212,38 @@ def test_a_masked_file_is_bound_read_only_and_its_directory_is_not_tmpfsd(tmp_pa
               allow=[docs], mask_files=[secret], agent_cmd="true")
     assert f"--tmpfs {docs}" not in seen["c"]
     assert f"--ro-bind /dev/null {secret}" in seen["c"]
+
+
+def test_unshare_net_reaches_the_sandbox_argv():
+    """`aet run` had network regardless of what the caller asked for.
+
+    `SandboxSpec.unshare_net` existed and `bwrap_argv` honoured it, but `run_agent` never passed it
+    through — so the flag was unreachable from the runner and from the CLI. A filesystem allow-list
+    is not an information boundary while the network is up: an agent that can reach the internet can
+    fetch what the allow-list withheld and publish what it protected. `sandbox.py`'s own docstring
+    has said exactly that since it was written.
+    """
+    import inspect
+    from pathlib import Path
+
+    from aet.isolation.sandbox import SandboxSpec, bwrap_argv
+    from aet.runner import run_agent
+
+    assert "unshare_net" in inspect.signature(run_agent).parameters, \
+        "the flag must be reachable from the runner, not only from SandboxSpec"
+    assert inspect.signature(run_agent).parameters["unshare_net"].default is False, \
+        "off by default: turning it on would break callers whose agent needs the API"
+
+    assert "--unshare-net" in bwrap_argv(SandboxSpec(workspace=Path("/tmp"), unshare_net=True))
+    assert "--unshare-net" not in bwrap_argv(SandboxSpec(workspace=Path("/tmp")))
+
+
+def test_resume_forwards_the_network_policy():
+    """Resuming must not silently restore the network on a run that was launched without it."""
+    import inspect
+
+    from aet.runner import resume_run
+
+    params = inspect.signature(resume_run).parameters
+    assert any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()), \
+        "resume_run forwards **kwargs, which is what carries unshare_net into the resumed run"

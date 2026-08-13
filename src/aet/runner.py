@@ -155,6 +155,15 @@ def run_agent(task: str | Path, workspace: str | Path, *,
               rw_binds: list | None = None,
               mask_files: list | None = None,
               unsetenv: list | None = None,
+              # A filesystem allow-list is not an information boundary while the network is up:
+              # an agent that can reach the internet can fetch anything the allow-list withheld and
+              # can publish anything it withheld from the outside. `SandboxSpec` has carried this
+              # flag and its own docstring saying so ("the filesystem allow-list means nothing if
+              # the agent can just fetch it") since it was written, and `run_agent` never passed it
+              # — so every `aet run` had network regardless of what the caller asked for.
+              # Default False, because turning it on by default would break callers whose agent
+              # legitimately needs the API. Callers that declare `network: unshared` now get it.
+              unshare_net: bool = False,
               env_prefix: str = "",
               allow_unsandboxed: bool = False,
               circt: bool | None = None,
@@ -197,6 +206,7 @@ def run_agent(task: str | Path, workspace: str | Path, *,
             rw_binds=[Path(p) for p in (rw_binds or [])],
             mask_files=[Path(p) for p in (mask_files or [])],
             unsetenv=list(unsetenv or []),
+            unshare_net=unshare_net,
         )
     elif sandbox == "none" and not (allow_unsandboxed or agent_cmd is not None):
         raise ValueError(
