@@ -125,7 +125,10 @@ def plot_trajectory(traj: RunTrajectory, *, ax=None, log_tokens: bool = True,
     for rb in traj.rounds[1:]:
         ax.axvline(rb.t_start_s / 60.0, color=S.INK, ls=(0, (1, 3)), lw=0.8, alpha=0.35, zorder=2)
 
-    cost = f"~${traj.final_cost_usd:.2f}" if traj.provisional else f"${traj.final_cost_usd:.2f}"
+    if traj.final_cost_usd is None:
+        cost = "unpriced"        # cost unavailable — never a fabricated $0
+    else:
+        cost = f"~${traj.final_cost_usd:.2f}" if traj.provisional else f"${traj.final_cost_usd:.2f}"
     n = traj.num_rounds
     S.title(ax, f"{traj.run_id}    ·    {n} round{'' if n == 1 else 's'} · {cost} · "
                 f"{S.fmt_duration(traj.duration_s)}", fs=15 * fs)

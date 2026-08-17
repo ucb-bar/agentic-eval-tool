@@ -28,10 +28,13 @@ from matplotlib.lines import Line2D
 RND_C = "#6f675c"   # round-divider colour
 
 
-def _fmt_cost(x: float, *, provisional: bool = False, ref: float | None = None) -> str:
+def _fmt_cost(x: float | None, *, provisional: bool = False, ref: float | None = None) -> str:
     """A $ label whose precision matches the magnitude — cents for sub-$10 sweeps (abc-testing-scale
     per-session costs), whole dollars for large runs — so small-dollar arms don't all read as ``$2``.
-    ``ref`` (e.g. the max across arms) picks the precision for a whole figure so labels are uniform."""
+    ``ref`` (e.g. the max across arms) picks the precision for a whole figure so labels are uniform.
+    ``None`` means unpriced (cost unavailable) — labelled as such, never drawn as a fabricated $0."""
+    if x is None:
+        return "unpriced"
     scale = ref if ref is not None else x
     digits = 2 if scale < 10 else (1 if scale < 100 else 0)
     return ("~$" if provisional else "$") + f"{x:.{digits}f}"
@@ -344,7 +347,7 @@ def plot_cost_vs_time(trajs, labels=None):
     fig, ax = plt.subplots(figsize=(15, 8.8))
     S.style_ax(ax)
     xmax = max((t.duration_s / 60.0 for t in trajs), default=1.0)
-    ymax = max((t.final_cost_usd for t in trajs), default=1.0)
+    ymax = max((t.final_cost_usd or 0.0 for t in trajs), default=1.0)
     for traj, lab, (col, mk, ls) in zip(trajs, labs, styles):
         s = traj.token_series()
         ax.plot(s["t"], s["spend"], color=col, lw=4.2, ls=ls, zorder=5, solid_capstyle="round")

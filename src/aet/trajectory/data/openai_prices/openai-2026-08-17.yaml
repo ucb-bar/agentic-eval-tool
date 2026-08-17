@@ -1,0 +1,42 @@
+# Versioned OpenAI/Codex price snapshot.
+#
+# ⚠️ TODO-verify: these rates are PLACEHOLDERS, not authoritative. They exist so the pricing
+# machinery (nullable cost, provenance, per-bucket breakdown) can be exercised end-to-end. They
+# MUST be confirmed against live OpenAI pricing (see pricing_url) before ANY metered/billed
+# campaign. `verified: false` is load-bearing: `PriceSnapshot.price_table()` still prices with
+# these, but the snapshot advertises that the numbers are unverified so a reviewer can gate spend.
+#
+# Units: USD per MILLION tokens (matches aet.trajectory.pricing.PriceTable). The 4 buckets are
+# (input, output, cache_read, cache_write). Codex's cache_write maps to PriceTable's
+# cache_creation slot.
+price_table_id: openai-2026-08-17
+provider: openai
+pricing_url: https://developers.openai.com/api/docs/guides/latest-model
+captured_at: "2026-08-17"
+currency: USD
+unit: per_million_tokens
+verified: false        # TODO-verify — placeholder rates, confirm before billed use
+service_tier: standard
+rates:
+  # keys are matched as case-insensitive substrings of the resolved model id (longest-key-wins),
+  # exactly like the built-in PriceTable keys.
+  gpt-5-codex:            # TODO-verify
+    input: 1.25
+    output: 10.0
+    cache_read: 0.125
+    cache_write: 0.0
+  gpt-5:                  # TODO-verify
+    input: 1.25
+    output: 10.0
+    cache_read: 0.125
+    cache_write: 0.0
+  gpt-5-mini:            # TODO-verify
+    input: 0.25
+    output: 2.0
+    cache_read: 0.025
+    cache_write: 0.0
+  o4-mini:               # TODO-verify
+    input: 1.1
+    output: 4.4
+    cache_read: 0.275
+    cache_write: 0.0

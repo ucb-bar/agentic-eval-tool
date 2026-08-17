@@ -13,7 +13,9 @@ def _cmd_import(args) -> None:
     from aet.trajectory.classify import ActivityConfig
     from aet.trajectory.importers import get_importer
 
-    importer = get_importer(args.source)
+    # `--format` is the spec spelling; it aliases `--source` (the historical flag). Either works.
+    source = getattr(args, "fmt", None) or args.source
+    importer = get_importer(source)
     cfg = ActivityConfig.from_json_file(args.classifier_config) if args.classifier_config else None
     circt = None
     if getattr(args, "circt", None) is True:
@@ -27,15 +29,24 @@ def _cmd_import(args) -> None:
         milestone_time=args.milestone_time,
         run_id=args.run_id or "",
     )
+    # the Codex importer resolves its requested model against the OpenAI price snapshot
+    if source == "codex":
+        kwargs["model"] = getattr(args, "model", None) or "gpt-5-codex"
+        if getattr(args, "price_snapshot", None):
+            kwargs["price_snapshot"] = args.price_snapshot
+        if getattr(args, "billing_mode", None):
+            kwargs["billing_mode"] = args.billing_mode
+        if getattr(args, "provider", None):
+            kwargs["provider"] = args.provider
     # the generic transcript importer accepts an optional terminal pass/fail + label
-    if args.source == "transcript":
+    if source == "transcript":
         kwargs["label"] = getattr(args, "label", None)
         kwargs["n_total"] = getattr(args, "n_total", 1)
         pb = getattr(args, "pass_bool", None)
         if pb is not None:
             kwargs["pass_bool"] = pb
     # the full-fidelity OTel importer records a terminal verdict as n_passed / n_total
-    elif args.source == "otel":
+    elif source == "otel":
         n_total = getattr(args, "n_total", 1)
         kwargs["n_total"] = n_total
         pb = getattr(args, "pass_bool", None)
@@ -46,11 +57,12 @@ def _cmd_import(args) -> None:
 
     out = Path(args.out) if args.out else Path(args.raw) / "trajectory.json"
     traj.to_json(out)
-    print(f"[aet] imported {args.source} run '{traj.run_id}': "
+    print(f"[aet] imported {source} run '{traj.run_id}': "
           f"{traj.num_rounds} rounds, {len(traj.points)} points, "
           f"{len(traj.milestones)} milestones, {len(traj.bands)} activity bands")
+    _cost_str = "unpriced" if traj.final_cost_usd is None else f"${traj.final_cost_usd:.4f}"
     print(f"[aet]   final: {traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens:,} tokens, "
-          f"${traj.final_cost_usd:.4f}, {traj.duration_s / 60.0:.1f} min")
+          f"{_cost_str}, {traj.duration_s / 60.0:.1f} min")
     if traj.milestones:
         prog = " → ".join(str(m.n_passed) for m in sorted(traj.milestones, key=lambda m: m.t_s))
         print(f"[aet]   test-pass milestones: {prog} / {traj.milestones[-1].n_total}")
@@ -154,7 +166,8 @@ def _cmd_plot_sessions(args) -> None:
         trajs.append(traj)
         labels.append(label)
         tok = traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens
-        cost = ("~$" if traj.provisional else "$") + f"{traj.final_cost_usd:.2f}"
+        cost = ("unpriced" if traj.final_cost_usd is None
+                else ("~$" if traj.provisional else "$") + f"{traj.final_cost_usd:.2f}")
         print(f"[aet]   {label}: {tok / 1e6:.2f}M tok · {cost} · {traj.duration_s / 60.0:.1f} min")
 
     if not trajs:
@@ -256,7 +269,10 @@ def _cmd_monitor(args) -> None:
     def _status(traj) -> str:
         cur = traj.bands[-1].category if traj.bands else "—"
         tok = traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens
-        cost = f"~${traj.final_cost_usd:.3f}(prov)" if traj.provisional else f"${traj.final_cost_usd:.3f}"
+        if traj.final_cost_usd is None:
+            cost = "unpriced"
+        else:
+            cost = f"~${traj.final_cost_usd:.3f}(prov)" if traj.provisional else f"${traj.final_cost_usd:.3f}"
         tests = ""
         if selfcheck:
             tp = _selfcheck_tests_passed(selfcheck)
@@ -279,7 +295,8 @@ def _cmd_monitor(args) -> None:
     print(f"[aet] {'streaming ended (result event)' if not traj.provisional else 'stopped (still in flight)'}: "
           f"{traj.num_rounds} round(s), {len(traj.points)} points, "
           f"{traj.final_input_tokens + traj.final_output_tokens + traj.final_cache_tokens:,} tok, "
-          f"{'~$' if traj.provisional else '$'}{traj.final_cost_usd:.3f}, {traj.duration_s / 60.0:.1f} min")
+          f"{'unpriced' if traj.final_cost_usd is None else ('~$' if traj.provisional else '$') + format(traj.final_cost_usd, '.3f')}, "
+          f"{traj.duration_s / 60.0:.1f} min")
     if args.emit_json:
         traj.to_json(args.emit_json)
         print(f"[aet] wrote snapshot {args.emit_json}")

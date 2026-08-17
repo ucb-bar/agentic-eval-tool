@@ -339,7 +339,8 @@ def read_run_spend(run_dir: str | Path) -> RunSpend:
     if not saw:
         traj = _read_trajectory(run_dir)
         if traj is not None:
-            cost = float(traj.final_cost_usd)
+            # preserve None (cost-unavailable) — the rollup already counts it as an unpriced run
+            cost = None if traj.final_cost_usd is None else float(traj.final_cost_usd)
             tok = TokenTotals(
                 input=int(traj.final_input_tokens),
                 output=int(traj.final_output_tokens),

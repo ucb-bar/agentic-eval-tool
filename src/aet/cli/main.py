@@ -251,8 +251,22 @@ def main() -> None:
                           help="Run layout to import. 'transcript' = generic Claude Code stream-json "
                                "*.jsonl (any project); 'otel' = full-fidelity OTLP capture "
                                "(otel_logs.jsonl from `aet otel-sink` — real per-turn tokens/cost/"
-                               "duration + cache); 'capsule-bench' = the bundled suite layout "
-                               "(default).")
+                               "duration + cache); 'codex' = Codex-CLI `codex exec --json` stdout "
+                               "JSONL (per-turn input/cached/cache-write/output/reasoning tokens + "
+                               "tool spans + nullable provenanced cost); 'capsule-bench' = the "
+                               "bundled suite layout (default).")
+    p_import.add_argument("--format", dest="fmt", default=None, metavar="FORMAT",
+                          help="Alias for --source (spec spelling); e.g. `--format codex`.")
+    p_import.add_argument("--model", dest="model", default=None, metavar="MODEL",
+                          help="[codex] Requested model id, resolved against the OpenAI price "
+                               "snapshot (default: gpt-5-codex)")
+    p_import.add_argument("--price-snapshot", dest="price_snapshot", default=None, metavar="FILE",
+                          help="[codex] Path to a versioned price snapshot (default: bundled openai)")
+    p_import.add_argument("--billing-mode", dest="billing_mode", default=None,
+                          choices=["per_token", "subscription"],
+                          help="[codex] Override billing mode (default: derived from provider)")
+    p_import.add_argument("--provider", dest="provider", default=None, metavar="PROVIDER",
+                          help="[codex] Provider id for billing classification (default: openai)")
     p_import.add_argument("--raw", required=True, metavar="DIR_OR_FILE",
                           help="Path to the existing run directory, a single transcript file "
                                "(--source transcript), or an otel_logs.jsonl (--source otel)")

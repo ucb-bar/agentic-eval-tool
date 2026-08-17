@@ -4,7 +4,35 @@ All notable changes to `aet` are recorded here.
 
 ## [Unreleased]
 
+### Changed
+- **`billing.METERED_PROVIDERS` now lists canonical `openai`** — an OpenAI API-key row (the metered
+  Codex path) was previously classified as `subscription` and silently dropped from reported spend.
+
 ### Added
+- **Codex-CLI importer + live recorder (`aet import --format codex`)** — ingests a
+  `codex exec --json` stdout JSONL stream (verified against codex-cli 0.147.0) into a canonical
+  `RunTrajectory`. `aet.trajectory.codex` is a lossless, **structural** normalizer (dispatch on the
+  dotted `type`, no regex; unknown events and non-JSON lines kept verbatim), shared by the batch
+  importer (`aet.trajectory.importers.codex`) and a streaming `CodexTrajectoryRecorder`
+  (`aet.trajectory.codex_recorder`) fed one timestamped line at a time — one normalization path, so
+  a run killed mid-turn re-imports to the same trajectory. Token buckets follow the subset rules
+  (cached/cache-write ⊆ input, reasoning ⊆ output; absent bucket stays `None`, never `0`) and are
+  kept non-overlapping so `cum_total` never double-counts. Idempotent; raw-vs-normalized event
+  counts reconcile.
+- **Reasoning tokens + cache read/write split on the trajectory** — `TrajectoryPoint`,
+  `RoundBoundary`, `RunTrajectory` summaries, and `token_series()` now carry reasoning output and the
+  per-round cache read/write split (schema `1.2`; older `1.0`/`1.1` files load unchanged).
+- **Nullable, provenanced cost (`aet.trajectory.cost.CostRecord`)** — `final_cost_usd` is now
+  `float | None`; `None` means *unpriced* (unknown), which is never rendered/aggregated as `$0`
+  (genuinely free). A `CostRecord` carries `kind` (metered / subscription_notional / unpriced),
+  `source`, and price-table provenance (id + sha256 + url).
+- **Versioned OpenAI price snapshot (`aet.trajectory.price_snapshot`)** — a hashable, frozen rate
+  map with a `verified` flag (the bundled `openai-2026-08-17` rates are **placeholders, TODO-verify**)
+  that copies into an experiment root for reproducibility and prices Codex usage under the subset
+  semantics.
+- **Codex reconciliation reports (`aet.trajectory.reconcile`)** — raw-events vs imported-events,
+  token-ledger vs trajectory (with subset-invariant checks), calculated cost vs admin/invoice cost,
+  and a missing/unpriced-fields report; plus per-turn token and tool ledger rows for the run bundle.
 - **Tests-passing CLIMB mined from oracle invocations (`aet.trajectory.oracle`)** — reconstructs the
   tests-over-time progression from the transcript itself: each `./run.sh` (testbench) invocation the
   agent runs becomes a `k/N` milestone at its wall time. Retroactive (works on existing runs), no

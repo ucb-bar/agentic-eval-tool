@@ -28,8 +28,12 @@ from dataclasses import dataclass
 #: Provider ids that bill per token against an account with a payment method. Substring match, so a
 #: versioned id (`aet:bedrock:opus`) classifies with its family.
 METERED_PROVIDERS: tuple[str, ...] = (
-    "bedrock", "vertex", "openai_compat", "anthropic_api",
+    "bedrock", "vertex", "openai", "openai_compat", "anthropic_api",
 )
+# NOTE: canonical `openai` (an OpenAI API key — the metered Codex path) must be listed explicitly.
+# Without it a `provider: openai` row matched none of the metered substrings and fell through to
+# `subscription`, so a real API-key charge silently vanished from reported spend. `openai` is a
+# substring of `openai_compat`, so the compat providers still classify as metered too.
 
 #: The two modes. `per_token` is money; `subscription` is quota, and its dollar figure is notional.
 MODES = ("per_token", "subscription")

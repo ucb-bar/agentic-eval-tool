@@ -80,7 +80,7 @@ def append_round(traj: RunTrajectory, result: ClaudeStreamResult, *,
     base_out = traj.final_output_tokens
     base_cache_read = traj.final_cache_read_tokens
     base_cache_creation = traj.final_cache_creation_tokens
-    base_cost = traj.final_cost_usd
+    base_cost = traj.final_cost_usd or 0.0   # None (unpriced) contributes nothing to the running sum
 
     turns = sorted(result.turn_usage, key=lambda t: (t.start_offset_s, t.turn))
     round_dur = _round_duration_s(result, turns)

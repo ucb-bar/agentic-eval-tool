@@ -22,7 +22,9 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-SCHEMA_VERSION = "1.1"   # 1.1 adds `checkpoints`; 1.0 files load unchanged (absent -> [])
+# 1.2 adds reasoning tokens + a per-round cache read/write split + a nullable `cost` provenance
+# record (unpriced ≠ $0). 1.1 adds `checkpoints`. Older files load unchanged (absent keys default).
+SCHEMA_VERSION = "1.2"
 
 
 @dataclass
@@ -35,12 +37,14 @@ class TrajectoryPoint:
     cum_cache_tokens: float = 0.0    # cache_read + cache_creation (matches load_arm's T_ca)
     cum_cache_read_tokens: float = 0.0      # cache hits (billed ~10× cheaper)
     cum_cache_creation_tokens: float = 0.0  # cache writes (billed at a ~25% premium)
+    cum_reasoning_tokens: float = 0.0       # reasoning output (a SUBSET of cum_output_tokens)
     cum_cost_usd: float = 0.0        # authoritative at round ends; provisional mid-stream
     round_index: int = 0
     provisional_cost: bool = False   # True while streaming before the round's result event
 
     @property
     def cum_total_tokens(self) -> float:
+        # reasoning is a subset of output — NOT added again, or output would be double-counted
         return self.cum_input_tokens + self.cum_output_tokens + self.cum_cache_tokens
 
 
@@ -121,7 +125,10 @@ class RoundBoundary:
     cost_usd: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
-    cache_tokens: int = 0
+    cache_tokens: int = 0            # cache_read + cache_creation (kept as their sum, back-compat)
+    cache_read_tokens: int = 0       # 1.2: the read/write split (0 on pre-1.2 rounds)
+    cache_creation_tokens: int = 0   # 1.2: cache writes
+    reasoning_tokens: int = 0        # 1.2: reasoning output (a SUBSET of output_tokens)
     n_passed: int | None = None
     n_total: int | None = None
     session_id: str = ""
@@ -147,12 +154,19 @@ class RunTrajectory:
     milestones: list[TestMilestone] = field(default_factory=list)
     checkpoints: list[Checkpoint] = field(default_factory=list)
     rounds: list[RoundBoundary] = field(default_factory=list)
-    final_cost_usd: float = 0.0
+    # NULLABLE by design: ``None`` means *unpriced* (cost unknown), which is NOT the same as a
+    # genuinely-free ``0.0``. A source that could not price the run (unknown model/rate, missing
+    # token bucket) leaves this ``None`` and callers must render/aggregate it as "unknown", never $0.
+    final_cost_usd: float | None = 0.0
     final_input_tokens: int = 0
     final_output_tokens: int = 0
     final_cache_tokens: int = 0             # cache_read + cache_creation (kept as their sum)
     final_cache_read_tokens: int = 0
     final_cache_creation_tokens: int = 0
+    final_reasoning_tokens: int = 0         # 1.2: reasoning output (a SUBSET of final_output_tokens)
+    #: Optional cost provenance (billing_mode/source/price snapshot). Present on sources that
+    #: produce it (the Codex importer); ``None`` for older/other sources. See ``trajectory/cost.py``.
+    cost: "dict | None" = None
     classifier_config: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------ serialization
@@ -171,6 +185,8 @@ class RunTrajectory:
             "final_cache_tokens": self.final_cache_tokens,
             "final_cache_read_tokens": self.final_cache_read_tokens,
             "final_cache_creation_tokens": self.final_cache_creation_tokens,
+            "final_reasoning_tokens": self.final_reasoning_tokens,
+            "cost": self.cost,
             "classifier_config": self.classifier_config,
             "points": [asdict(p) for p in self.points],
             "bands": [asdict(b) for b in self.bands],
@@ -189,12 +205,17 @@ class RunTrajectory:
             duration_s=float(d.get("duration_s", 0.0)),
             num_rounds=int(d.get("num_rounds", 0)),
             provisional=bool(d.get("provisional", False)),
-            final_cost_usd=float(d.get("final_cost_usd", 0.0)),
+            # preserve None (unpriced) vs a number (priced). Absent key → 0.0 keeps pre-1.2 files,
+            # which always wrote a number, loading exactly as before.
+            final_cost_usd=(None if "final_cost_usd" in d and d["final_cost_usd"] is None
+                            else float(d.get("final_cost_usd", 0.0))),
             final_input_tokens=int(d.get("final_input_tokens", 0)),
             final_output_tokens=int(d.get("final_output_tokens", 0)),
             final_cache_tokens=int(d.get("final_cache_tokens", 0)),
             final_cache_read_tokens=int(d.get("final_cache_read_tokens", 0)),
             final_cache_creation_tokens=int(d.get("final_cache_creation_tokens", 0)),
+            final_reasoning_tokens=int(d.get("final_reasoning_tokens", 0)),
+            cost=d.get("cost", None),
             classifier_config=d.get("classifier_config", {}) or {},
             points=[TrajectoryPoint(**p) for p in d.get("points", [])],
             bands=[ActivityBand(**b) for b in d.get("bands", [])],
@@ -238,6 +259,7 @@ class RunTrajectory:
             "cache": [p.cum_cache_tokens for p in self.points],
             "cache_read": [p.cum_cache_read_tokens for p in self.points],
             "cache_creation": [p.cum_cache_creation_tokens for p in self.points],
+            "reasoning": [p.cum_reasoning_tokens for p in self.points],
             "total": [p.cum_total_tokens for p in self.points],
             "spend": [p.cum_cost_usd for p in self.points],
         }

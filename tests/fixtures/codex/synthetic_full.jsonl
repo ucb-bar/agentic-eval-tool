@@ -1,0 +1,14 @@
+{"type":"thread.started","thread_id":"01aaaaaa-0000-7000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"I will create a file, run a check, then report."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc 'echo hi > hello.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc 'echo hi > hello.txt'","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"file_change","changes":[{"path":"hello.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"hello.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Created hello.txt and verified it."}}
+{"type":"turn.completed","usage":{"input_tokens":10000,"cached_input_tokens":4000,"cache_write_input_tokens":1000,"output_tokens":500,"reasoning_output_tokens":120}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"FINISHED"}}
+{"type":"turn.completed","usage":{"input_tokens":12000,"cached_input_tokens":9000,"cache_write_input_tokens":null,"output_tokens":40,"reasoning_output_tokens":0}}
+{"type":"turn.failed","error":{"message":"simulated transient provider error"}}
+this line is not json and must be preserved verbatim as UNPARSED

@@ -39,6 +39,7 @@ where = ["src"]
     "templates/**/*",
     "templates/**/.gitkeep",
     "suites/targetgen/schemas/*.json",
+    "trajectory/data/openai_prices/*.yaml",
 ]
 
 [tool.ruff]

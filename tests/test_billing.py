@@ -72,3 +72,13 @@ def test_a_transcript_with_no_result_event_still_produces_a_mode():
     res = parse_stream('{"type":"system","subtype":"init","session_id":"s"}')
     assert res.billing_mode == "subscription"
     assert not res.has_result_event
+
+
+def test_canonical_openai_provider_is_metered():
+    """An OpenAI API key (the metered Codex path) bills against a card. Before `openai` was listed
+    explicitly it matched none of the metered substrings and fell through to `subscription`, so a
+    real charge vanished from reported spend."""
+    assert is_metered({"provider": "openai"})
+    assert is_metered({"provider": "chia:openai:gpt-5-codex"})
+    # the compat providers still classify as metered (openai is a substring of openai_compat)
+    assert is_metered({"provider": "openai_compat"})

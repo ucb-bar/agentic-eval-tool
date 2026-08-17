@@ -29,6 +29,8 @@ def emit_trajectory(traj: RunTrajectory, logger, run_path: str | Path) -> Path:
         "final_cache_tokens": traj.final_cache_tokens,
         "final_cache_read_tokens": traj.final_cache_read_tokens,
         "final_cache_creation_tokens": traj.final_cache_creation_tokens,
+        "final_reasoning_tokens": traj.final_reasoning_tokens,
+        "cost": traj.cost,
     })
     for rb in traj.rounds:
         logger.log_round_boundary(rb)
@@ -47,6 +49,11 @@ def emit_trajectory(traj: RunTrajectory, logger, run_path: str | Path) -> Path:
 
 
 # --------------------------------------------------------------------- reconstruct
+def _opt_float(v) -> float | None:
+    """Preserve ``None`` (unpriced) while coercing a present cost to float."""
+    return None if v is None else float(v)
+
+
 def _read_jsonl(path: Path) -> list[dict]:
     if not path.is_file():
         return []
@@ -131,8 +138,8 @@ def trajectory_from_logs(run_path: str | Path) -> RunTrajectory:
         duration_s=float(summary.get("duration_s", rounds[-1].t_end_s if rounds else 0.0)),
         num_rounds=int(summary.get("num_rounds", len(rounds))),
         points=points, rounds=rounds, milestones=milestones,
-        final_cost_usd=float(summary.get("final_cost_usd",
-                                         points[-1].cum_cost_usd if points else 0.0)),
+        final_cost_usd=_opt_float(summary.get("final_cost_usd",
+                                              points[-1].cum_cost_usd if points else 0.0)),
         final_input_tokens=int(summary.get("final_input_tokens",
                                            points[-1].cum_input_tokens if points else 0)),
         final_output_tokens=int(summary.get("final_output_tokens",
@@ -144,6 +151,10 @@ def trajectory_from_logs(run_path: str | Path) -> RunTrajectory:
         final_cache_creation_tokens=int(summary.get(
             "final_cache_creation_tokens",
             points[-1].cum_cache_creation_tokens if points else 0)),
+        final_reasoning_tokens=int(summary.get(
+            "final_reasoning_tokens",
+            points[-1].cum_reasoning_tokens if points else 0)),
+        cost=summary.get("cost"),
     )
     return traj
 
