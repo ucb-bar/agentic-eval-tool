@@ -22,9 +22,9 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-# 1.2 adds reasoning tokens + a per-round cache read/write split + a nullable `cost` provenance
-# record (unpriced ≠ $0). 1.1 adds `checkpoints`. Older files load unchanged (absent keys default).
-SCHEMA_VERSION = "1.2"
+# 1.3 adds first-class inference attempts and agent hierarchy. Older files load
+# unchanged because the new collection defaults empty. 1.2 added cache splits.
+SCHEMA_VERSION = "1.3"
 
 
 @dataclass
@@ -122,7 +122,7 @@ class RoundBoundary:
     index: int
     t_start_s: float
     t_end_s: float
-    cost_usd: float = 0.0
+    cost_usd: float | None = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
     cache_tokens: int = 0            # cache_read + cache_creation (kept as their sum, back-compat)
@@ -136,6 +136,64 @@ class RoundBoundary:
     @property
     def duration_s(self) -> float:
         return max(0.0, self.t_end_s - self.t_start_s)
+
+
+@dataclass
+class InferenceRecord:
+    """One provider request/attempt with measured and explicitly inferred cache facts.
+
+    Token counters are provider-reported measurements. ``reasoning_tokens`` is a
+    subset of output, and cache read/write are separate input classes. Context
+    occupancy and TTL expiry are estimates, never physical KV-cache measurements.
+    """
+
+    request_id: str
+    t_start_s: float
+    t_end_s: float
+    agent_id: str = ""
+    parent_agent_id: str = ""
+    trace_id: str = ""
+    span_id: str = ""
+    call_id: str = ""
+    session_id: str = ""
+    attempt: int = 1
+    provider: str = ""
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    status: str = "unknown"
+    retry: bool = False
+    cost_usd: float | None = None
+    cost_source: str = "unavailable"
+    billing_mode: str = "per_token"
+    context_window_tokens: int | None = None
+    estimated_context_tokens: int | None = None
+    cache_ttl_s: float | None = None
+    ttl_inference: str = "unavailable"
+
+    @property
+    def duration_s(self) -> float:
+        return max(0.0, self.t_end_s - self.t_start_s)
+
+    @property
+    def billed_input_tokens(self) -> int:
+        return self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+
+    @property
+    def cache_hit_ratio(self) -> float | None:
+        total = self.billed_input_tokens
+        return self.cache_read_tokens / total if total else None
+
+    @property
+    def context_occupancy_ratio(self) -> float | None:
+        if not self.context_window_tokens or self.estimated_context_tokens is None:
+            return None
+        # Do not clamp: >1 is useful evidence that the configured window or
+        # provider semantics do not match, not proof of physical over-capacity.
+        return self.estimated_context_tokens / self.context_window_tokens
 
 
 @dataclass
@@ -154,6 +212,7 @@ class RunTrajectory:
     milestones: list[TestMilestone] = field(default_factory=list)
     checkpoints: list[Checkpoint] = field(default_factory=list)
     rounds: list[RoundBoundary] = field(default_factory=list)
+    inferences: list[InferenceRecord] = field(default_factory=list)
     # NULLABLE by design: ``None`` means *unpriced* (cost unknown), which is NOT the same as a
     # genuinely-free ``0.0``. A source that could not price the run (unknown model/rate, missing
     # token bucket) leaves this ``None`` and callers must render/aggregate it as "unknown", never $0.
@@ -193,6 +252,7 @@ class RunTrajectory:
             "milestones": [asdict(m) for m in self.milestones],
             "checkpoints": [asdict(c) for c in self.checkpoints],
             "rounds": [asdict(r) for r in self.rounds],
+            "inferences": [asdict(r) for r in self.inferences],
         }
 
     @classmethod
@@ -223,6 +283,8 @@ class RunTrajectory:
             # .get with a default: a v1.0 trajectory has no checkpoints key and must still load.
             checkpoints=[Checkpoint(**c) for c in d.get("checkpoints", [])],
             rounds=[RoundBoundary(**r) for r in d.get("rounds", [])],
+            # 1.2 and older files have no inference collection and load unchanged.
+            inferences=[InferenceRecord(**r) for r in d.get("inferences", [])],
         )
 
     def to_json(self, path: str | Path) -> Path:
@@ -284,6 +346,35 @@ class RunTrajectory:
         Unreached checkpoints are kept in the list with ``None`` rather than dropped, so a run that
         stalled at parse and a run that was never measured render differently."""
         return [(k, self.time_to(k, scope)) for k in CHECKPOINT_KINDS]
+
+    def per_agent_rollup(self) -> dict[str, dict]:
+        """Measured token/cost totals and derived activity share per agent."""
+        out: dict[str, dict] = {}
+        for rec in self.inferences:
+            key = rec.agent_id or "unattributed"
+            row = out.setdefault(key, {
+                "agent_id": key, "parent_agent_id": rec.parent_agent_id,
+                "requests": 0, "retries": 0, "input_tokens": 0,
+                "output_tokens": 0, "cache_read_tokens": 0,
+                "cache_write_tokens": 0, "reasoning_tokens": 0,
+                "cost_usd": 0.0, "unpriced_requests": 0, "active_s": 0.0,
+            })
+            row["requests"] += 1
+            row["retries"] += int(rec.retry)
+            row["input_tokens"] += rec.input_tokens
+            row["output_tokens"] += rec.output_tokens
+            row["cache_read_tokens"] += rec.cache_read_tokens
+            row["cache_write_tokens"] += rec.cache_write_tokens
+            row["reasoning_tokens"] += rec.reasoning_tokens
+            row["active_s"] += rec.duration_s
+            if rec.cost_usd is None:
+                row["unpriced_requests"] += 1
+            else:
+                row["cost_usd"] += rec.cost_usd
+        total = sum(float(row["active_s"]) for row in out.values())
+        for row in out.values():
+            row["activity_share"] = (row["active_s"] / total) if total else 0.0
+        return out
 
     # ------------------------------------------------------------------ tests-over-time
     def tests_total(self) -> int | None:

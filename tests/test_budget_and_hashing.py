@@ -8,8 +8,6 @@ absent: a declared-and-unread field reads like a control while providing none.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from aet.core.budget import (

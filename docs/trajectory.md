@@ -5,6 +5,13 @@ A **`RunTrajectory`** is the canonical record of what an agent did over time: cu
 long tool-waits), and test-pass milestones. It is pure-stdlib and is what every figure and report
 consumes.
 
+Schema 1.3 also carries one `InferenceRecord` per provider attempt: agent hierarchy, model/provider,
+timing, retry status, fresh/cache-read/cache-write/output/reasoning token buckets, and cost
+provenance. Cache buckets and reasoning are subsets, not extra total tokens. Context occupancy is
+derived from reported prompt tokens and a configured context window; probable TTL expiry is inferred
+only from a declared TTL plus an observed idle-gap/cache-read transition. Neither is a measurement
+of physical KV-cache capacity or eviction cause.
+
 ## Get one
 
 ```python
@@ -14,6 +21,16 @@ traj = import_transcript("run/transcript.jsonl", run_id="run-a")
 print(traj.num_rounds, traj.final_cost_usd, traj.provisional)
 print(traj.token_series()["spend"])      # cumulative $ over time (minutes on "t")
 ```
+
+Chia profiler and OTLP captures use the same model:
+
+```bash
+aet import --source chia --raw ChiaProfileCollector.log --out trajectory.json
+aet import --source otel --raw otel_logs.jsonl --out trajectory.json
+aet plot trajectory.json --kind agent-profiles --out agent-profile.png
+```
+
+The last command writes PNG/SVG, a per-inference CSV, and a per-agent hierarchy/rollup JSON.
 
 - Handles CLI `stream-json` (billed cost) and desktop session logs (provisional cost — see
   [ADR-0002](adr/0002-session-log-provisional-cost.md)).

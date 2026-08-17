@@ -17,6 +17,7 @@ the ``[viz]`` extra via ``aet.viz.style``'s guarded import.
 """
 from __future__ import annotations
 
+from aet.trajectory.export import activity_rollup
 from aet.trajectory.model import RunTrajectory
 from aet.viz import style as S
 from aet.viz.style import plt, np
@@ -411,4 +412,91 @@ def plot_tests_facets(trajs, labels=None):
         if i == n - 1:
             ax.set_xlabel("Time (min)", fontsize=25)
     S.suptitle(fig, "Tests passing over time — one lane per run", y=1 - 0.45 / figh, fs=30)
+    return fig
+
+
+def plot_agent_profiles(trajs, labels=None):
+    """Per-run inference rates, cache signals, and per-agent active share.
+
+    Cache hit rate is derived from provider counters. Context occupancy is
+    labelled estimated because no provider exposes physical KV-cache fullness.
+    """
+    S.use_house_style()
+    trajs = [traj for traj in trajs if traj is not None]
+    labs = _labels_for(trajs, labels)
+    n = max(1, len(trajs))
+    fig, axes = plt.subplots(n, 4, figsize=(23, 4.4 * n), squeeze=False)
+    fig.subplots_adjust(left=0.07, right=0.98, top=0.91, bottom=0.10, wspace=0.34, hspace=0.5)
+    for row, (traj, label) in enumerate(zip(trajs, labs)):
+        rate_ax, cache_ax, agent_ax, category_ax = axes[row]
+        for axis in axes[row]:
+            S.style_ax(axis)
+        records = traj.inferences
+        times = [record.t_end_s / 60.0 for record in records]
+
+        def rate(record, field):
+            duration_min = record.duration_s / 60.0
+            return getattr(record, field) / duration_min if duration_min else 0.0
+
+        series = (
+            ("input_tokens", S.L_INPUT, "fresh input"),
+            ("output_tokens", S.L_OUTPUT, "output"),
+            ("cache_read_tokens", S.L_CACHE_READ, "cache read"),
+            ("cache_write_tokens", S.L_CACHE_WRITE, "cache write"),
+        )
+        for field, color, name in series:
+            values = [rate(record, field) for record in records]
+            if any(values):
+                rate_ax.plot(times, values, marker="o", lw=2.3, color=color, label=name)
+        rate_ax.set_yscale("symlog", linthresh=1)
+        rate_ax.set_xlabel("time (min)")
+        rate_ax.set_ylabel("reported tokens / active min")
+        rate_ax.legend(fontsize=8)
+        S.title(rate_ax, f"{label}: token rates", fs=14)
+
+        hits = [record.cache_hit_ratio for record in records]
+        occupancy = [record.context_occupancy_ratio for record in records]
+        hit_x = [x for x, value in zip(times, hits) if value is not None]
+        hit_y = [value for value in hits if value is not None]
+        occ_x = [x for x, value in zip(times, occupancy) if value is not None]
+        occ_y = [value for value in occupancy if value is not None]
+        if hit_y:
+            cache_ax.plot(hit_x, hit_y, marker="o", color=S.L_CACHE_READ, label="cache hit ratio")
+        if occ_y:
+            cache_ax.plot(occ_x, occ_y, marker="s", color=S.MAUVE,
+                          label="estimated context occupancy")
+        cache_ax.set_ylim(0, 1.05)
+        cache_ax.set_xlabel("time (min)")
+        cache_ax.set_ylabel("ratio")
+        if hit_y or occ_y:
+            cache_ax.legend(fontsize=8)
+        S.title(cache_ax, "Cache/context signals", fs=14)
+
+        rollup = traj.per_agent_rollup()
+        names = list(rollup) or ["unattributed"]
+        shares = [rollup[name]["activity_share"] for name in names] if rollup else [0.0]
+        ypos = np.arange(len(names))
+        agent_ax.barh(ypos, shares, color=S.NAVY, alpha=0.85)
+        agent_ax.set_yticks(ypos, labels=names)
+        agent_ax.set_xlim(0, 1.0)
+        agent_ax.set_xlabel("share of recorded model-active time")
+        S.title(agent_ax, "Per-agent activity", fs=14)
+
+        categories = activity_rollup(traj)
+        category_names = list(categories) or ["unobserved"]
+        total_active_s = sum(categories.values())
+        category_shares = (
+            [categories[name] / total_active_s for name in category_names]
+            if total_active_s else [0.0]
+        )
+        category_ax.bar(
+            category_names, category_shares,
+            color=[S.NAVY, S.GOLD, S.MAUVE, S.L_CACHE_READ][:len(category_names)],
+            alpha=0.85,
+        )
+        category_ax.set_ylim(0, 1.0)
+        category_ax.tick_params(axis="x", rotation=30)
+        category_ax.set_ylabel("share of recorded active spans")
+        S.title(category_ax, "Model/tool activity share", fs=14)
+    S.suptitle(fig, "Agentic profile — measured counters, labelled derivations", fs=24)
     return fig

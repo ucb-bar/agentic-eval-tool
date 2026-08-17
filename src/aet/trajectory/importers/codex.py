@@ -29,7 +29,7 @@ from aet.trajectory.classify import ActivityClassifier, ActivityConfig
 from aet.trajectory.codex import CodexNormalizer, CodexRun
 from aet.trajectory.cost import CostRecord
 from aet.trajectory.model import (
-    ActivityBand, Checkpoint, RoundBoundary, RunTrajectory, TrajectoryPoint,
+    ActivityBand, Checkpoint, InferenceRecord, RoundBoundary, RunTrajectory, TrajectoryPoint,
 )
 from aet.trajectory.price_snapshot import PriceSnapshot, cost_record_for
 
@@ -155,6 +155,18 @@ def build_trajectory_from_run(
             cache_tokens=int(cr + cw), cache_read_tokens=int(cr),
             cache_creation_tokens=int(cw), reasoning_tokens=int(reason),
             session_id=run.thread_id or ""))
+        traj.inferences.append(InferenceRecord(
+            request_id=f"{run.thread_id or run_id}:{i}",
+            t_start_s=float(t_start), t_end_s=float(t_s),
+            session_id=run.thread_id or "", attempt=1,
+            provider=str((billing_row or {}).get("provider", "openai")), model=model,
+            input_tokens=int(unc), output_tokens=int(out), cache_read_tokens=int(cr),
+            cache_write_tokens=int(cw), reasoning_tokens=int(reason), status="completed",
+            cost_usd=(round(turn_cost, 6) if have_price else None),
+            cost_source=("price_calculated" if have_price else "unavailable"),
+            billing_mode=str((billing_row or {}).get("billing_mode", "per_token")),
+            estimated_context_tokens=int(unc + cr + cw),
+        ))
 
     # ---- activity bands / tool spans from structured items ----------------------------------
     for tc in run.tools:
