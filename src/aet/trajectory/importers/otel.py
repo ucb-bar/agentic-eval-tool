@@ -21,7 +21,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aet.trajectory.model import ActivityBand, RoundBoundary, RunTrajectory, TrajectoryPoint, TestMilestone
+from aet.trajectory.model import (
+    ActivityBand, InferenceRecord, RoundBoundary, RunTrajectory, TrajectoryPoint, TestMilestone,
+)
 
 
 # tool_name → activity category. Bash is split by duration: a long Bash is a tool-wait (in the
@@ -57,6 +59,36 @@ def parse_otel_logs(path: str | Path) -> list[dict]:
         except Exception:
             continue
         if env.get("kind") != "logs":
+            if env.get("kind") == "traces":
+                for rs in env.get("payload", {}).get("resourceSpans", []) or []:
+                    for ss in rs.get("scopeSpans", []) or []:
+                        for span in ss.get("spans", []) or []:
+                            attrs = {a["key"]: _av(a) for a in span.get("attributes", []) or []}
+                            name = span.get("name") or ""
+                            # Normalize an inference span to the same event vocabulary
+                            # as Claude's logs path; unknown spans remain available for
+                            # hierarchy/activity consumers without inventing usage.
+                            if name in ("claude_code.api_request", "gen_ai.client.operation"):
+                                normalized = "claude_code.api_request"
+                            elif name in ("claude_code.tool_result", "gen_ai.tool.call"):
+                                normalized = "claude_code.tool_result"
+                            else:
+                                normalized = name
+                            try:
+                                t_ns = int(span.get("endTimeUnixNano") or 0)
+                            except (TypeError, ValueError):
+                                t_ns = 0
+                            if span.get("startTimeUnixNano") and t_ns:
+                                try:
+                                    attrs.setdefault("duration_ms", (
+                                        t_ns - int(span["startTimeUnixNano"])) / 1e6)
+                                except (TypeError, ValueError):
+                                    pass
+                            attrs.setdefault("trace_id", span.get("traceId", ""))
+                            attrs.setdefault("span_id", span.get("spanId", ""))
+                            attrs.setdefault("parent_span_id", span.get("parentSpanId", ""))
+                            out.append({"seq": len(out), "t_ns": t_ns, "signal": "trace",
+                                        "name": normalized, "attrs": attrs})
             continue
         for rl in env.get("payload", {}).get("resourceLogs", []) or []:
             for sl in rl.get("scopeLogs", []) or []:
@@ -72,7 +104,8 @@ def parse_otel_logs(path: str | Path) -> list[dict]:
                         seq = int(attrs.get("event.sequence"))
                     except (TypeError, ValueError):
                         seq = 10 ** 9
-                    out.append({"seq": seq, "t_ns": t_ns, "name": name, "attrs": attrs})
+                    out.append({"seq": seq, "t_ns": t_ns, "signal": "log",
+                                "name": name, "attrs": attrs})
     out.sort(key=lambda e: (e["seq"], e["t_ns"]))
     return out
 
@@ -165,15 +198,24 @@ def build_from_otel_events(events: list[dict], *, n_passed=None, n_total=1, tool
     # api_request completing at T with duration≈840s → span [T−840, T]. The wall duration is the last
     # completion time, NOT max(start+duration) — durations laid forward would overlap/overshoot.
     pts = []
-    cin = cout = ccache = ccost = 0.0
+    cin = cout = ccache_read = ccache_write = creason = ccost = 0.0
     for e in sorted(reqs, key=lambda e: (e["t_ns"], e["seq"])):
         a = e["attrs"]
-        cin += _i(a, "input_tokens") + _i(a, "cache_creation_tokens")
+        # These are distinct priced input classes. Cache creation used to be
+        # added into fresh input and then lost from cache, overstating fresh
+        # tokens and understating total cache activity.
+        cin += _i(a, "input_tokens")
         cout += _i(a, "output_tokens")
-        ccache += _i(a, "cache_read_tokens")
+        ccache_read += _i(a, "cache_read_tokens")
+        ccache_write += _i(a, "cache_creation_tokens")
+        creason += _i(a, "reasoning_tokens")
         ccost += _f(a, "cost_usd")
         pts.append(TrajectoryPoint(t_s=sec(e), cum_input_tokens=cin, cum_output_tokens=cout,
-                                   cum_cache_tokens=ccache, cum_cost_usd=round(ccost, 6)))
+                                   cum_cache_tokens=ccache_read + ccache_write,
+                                   cum_cache_read_tokens=ccache_read,
+                                   cum_cache_creation_tokens=ccache_write,
+                                   cum_reasoning_tokens=creason,
+                                   cum_cost_usd=round(ccost, 6)))
     dur_s = max(0.001, max(sec(e) for e in events))     # last completion ≈ subprocess wall
 
     # SUB-TURN density (optional): OTel gives one exact point per turn, so a long extended-thinking
@@ -184,16 +226,18 @@ def build_from_otel_events(events: list[dict], *, n_passed=None, n_total=1, tool
     # (they step at turn boundaries) so they stay per-turn.
     if think_cum and len(think_cum) >= 4 and pts:
         req_spans = []           # (start_s, end_s, cum_out_at_turn_end, cum_in, cum_cache, cum_cost)
-        cin2 = cout2 = cca2 = ccst2 = 0.0
+        cin2 = cout2 = cca_read2 = cca_write2 = ccst2 = 0.0
         for e in sorted(reqs, key=lambda e: (e["t_ns"], e["seq"])):
             a = e["attrs"]
             d = _f(a, "duration_ms") / 1000.0
             end = sec(e)
-            cin2 += _i(a, "input_tokens") + _i(a, "cache_creation_tokens")
+            cin2 += _i(a, "input_tokens")
             cout2 += _i(a, "output_tokens")
-            cca2 += _i(a, "cache_read_tokens")
+            cca_read2 += _i(a, "cache_read_tokens")
+            cca_write2 += _i(a, "cache_creation_tokens")
             ccst2 += _f(a, "cost_usd")
-            req_spans.append((max(0.0, end - d), end, cout2, cin2, cca2, round(ccst2, 6)))
+            req_spans.append((max(0.0, end - d), end, cout2, cin2,
+                              cca_read2, cca_write2, round(ccst2, 6)))
         think_total = think_cum[-1] or 1.0
         out_total = cout2 or 1.0
         # even-distribute the N think samples across the concatenated think windows, in order
@@ -202,7 +246,7 @@ def build_from_otel_events(events: list[dict], *, n_passed=None, n_total=1, tool
         win_tot = sum(win_durs) or 1.0
         dense = []
         acc = 0
-        for wi, (s0, s1, co, ci, cc, ccost) in enumerate(req_spans):
+        for wi, (s0, s1, co, ci, cr, cw, ccost) in enumerate(req_spans):
             k = max(1, round(n * win_durs[wi] / win_tot))
             for j in range(k):
                 if acc >= n:
@@ -214,7 +258,9 @@ def build_from_otel_events(events: list[dict], *, n_passed=None, n_total=1, tool
                 # output scaled from the thinking progression to the exact grand total
                 dense.append(TrajectoryPoint(
                     t_s=t, cum_output_tokens=(cthink / think_total) * out_total,
-                    cum_input_tokens=ci, cum_cache_tokens=cc, cum_cost_usd=ccost))
+                    cum_input_tokens=ci, cum_cache_tokens=cr + cw,
+                    cum_cache_read_tokens=cr, cum_cache_creation_tokens=cw,
+                    cum_cost_usd=ccost))
         if dense:
             dense[-1] = pts[-1]                          # pin the exact final totals
             pts = sorted(dense, key=lambda p: p.t_s)
@@ -241,12 +287,124 @@ def build_from_otel_events(events: list[dict], *, n_passed=None, n_total=1, tool
             prev = end_s
     dur_s = max(dur_s, prev)
 
-    totals = {"input": int(cin), "output": int(cout), "cache": int(ccache), "cost": round(ccost, 6)}
+    totals = {"input": int(cin), "output": int(cout),
+              "cache": int(ccache_read + ccache_write),
+              "cache_read": int(ccache_read), "cache_creation": int(ccache_write),
+              "cost": round(ccost, 6)}
     milestones = []
     if n_passed is not None:
         milestones = [TestMilestone(t_s=dur_s, n_passed=int(n_passed), n_total=int(n_total),
                                     scope="all", source="terminal_verdict")]
     return pts, bands, totals, dur_s, milestones
+
+
+def inference_records_from_otel(events: list[dict]) -> list[InferenceRecord]:
+    """Extract de-duplicated inference attempts from OTLP logs and spans.
+
+    Logs are preferred when a CLI exports both signals. A request/span identity
+    is the de-duplication key; missing identities fall back to timestamp+model.
+    Cache TTL expiry is only labelled ``probable_expiry`` when an idle gap
+    exceeds a declared TTL and a formerly cached session subsequently reports
+    no cache reads.
+    """
+    requests = [event for event in events if event["name"] == "claude_code.api_request"]
+    if not requests:
+        return []
+    starts = []
+    for event in requests:
+        try:
+            duration_ns = int(float(event["attrs"].get("duration_ms") or 0) * 1e6)
+        except (TypeError, ValueError):
+            duration_ns = 0
+        starts.append(max(0, event["t_ns"] - duration_ns))
+    origin_ns = min(starts) if starts else 0
+
+    def pick(attrs, *keys, default=None):
+        for key in keys:
+            value = attrs.get(key)
+            if value not in (None, ""):
+                return value
+        return default
+
+    def integer(attrs, *keys) -> int:
+        try:
+            return int(pick(attrs, *keys, default=0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    records: list[InferenceRecord] = []
+    seen: set[str] = set()
+    # Prefer log records when both signals describe the same request: Claude's
+    # logs carry its native cache/cost vocabulary, while generic spans may omit it.
+    ordered = sorted(requests, key=lambda e: (
+        0 if e.get("signal") == "log" else 1, e["t_ns"], e["seq"],
+    ))
+    for index, event in enumerate(ordered):
+        attrs = event["attrs"]
+        request_id = str(pick(attrs, "request_id", "gen_ai.request.id", "span_id",
+                              default=f"otel-{event['t_ns']}-{index}"))
+        identities = {str(value) for value in (
+            attrs.get("span_id"), attrs.get("gen_ai.request.id"), attrs.get("request_id"),
+            request_id,
+        ) if value not in (None, "")}
+        if seen.intersection(identities):
+            continue
+        seen.update(identities)
+        try:
+            duration_s = max(0.0, float(attrs.get("duration_ms") or 0) / 1000.0)
+        except (TypeError, ValueError):
+            duration_s = 0.0
+        end_s = max(0.0, (event["t_ns"] - origin_ns) / 1e9)
+        try:
+            cost = float(pick(attrs, "cost_usd", "gen_ai.usage.cost", default=None))
+        except (TypeError, ValueError):
+            cost = None
+        context_window = integer(attrs, "context_window_tokens", "gen_ai.context_window.tokens") or None
+        fresh = integer(attrs, "input_tokens", "gen_ai.usage.input_tokens")
+        read = integer(attrs, "cache_read_tokens", "cache_read_input_tokens",
+                       "gen_ai.usage.cache_read_tokens")
+        write = integer(attrs, "cache_creation_tokens", "cache_write_tokens",
+                        "gen_ai.usage.cache_write_tokens")
+        try:
+            ttl = float(pick(attrs, "cache_ttl_s", "gen_ai.cache.ttl_s", default=None))
+        except (TypeError, ValueError):
+            ttl = None
+        records.append(InferenceRecord(
+            request_id=request_id, t_start_s=max(0.0, end_s - duration_s), t_end_s=end_s,
+            agent_id=str(pick(attrs, "agent_id", "gen_ai.agent.id", default="")),
+            parent_agent_id=str(pick(attrs, "parent_agent_id", "gen_ai.agent.parent_id", default="")),
+            trace_id=str(attrs.get("trace_id") or ""), span_id=str(attrs.get("span_id") or ""),
+            call_id=str(attrs.get("call_id") or ""), session_id=str(pick(
+                attrs, "session_id", "conversation_id", "gen_ai.conversation.id", default="")),
+            attempt=integer(attrs, "attempt", "gen_ai.request.attempt") or 1,
+            provider=str(pick(attrs, "provider", "gen_ai.provider.name", default="anthropic")),
+            model=str(pick(attrs, "model", "gen_ai.response.model", default="")),
+            input_tokens=fresh,
+            output_tokens=integer(attrs, "output_tokens", "gen_ai.usage.output_tokens"),
+            cache_read_tokens=read, cache_write_tokens=write,
+            reasoning_tokens=integer(attrs, "reasoning_tokens", "gen_ai.usage.reasoning_tokens"),
+            status=str(pick(attrs, "status", "gen_ai.response.finish_reasons", default="completed")),
+            retry=bool(integer(attrs, "retry") or (integer(attrs, "attempt") > 1)),
+            cost_usd=cost, cost_source="billed" if cost is not None else "unavailable",
+            billing_mode=str(attrs.get("billing_mode") or "per_token"),
+            context_window_tokens=context_window,
+            estimated_context_tokens=fresh + read + write,
+            cache_ttl_s=ttl,
+        ))
+
+    records.sort(key=lambda record: (record.t_end_s, record.request_id))
+    previous: dict[str, InferenceRecord] = {}
+    for record in records:
+        key = record.session_id or record.agent_id or "unattributed"
+        prior = previous.get(key)
+        if (prior and record.cache_ttl_s and prior.cache_read_tokens > 0
+                and record.cache_read_tokens == 0
+                and record.t_start_s - prior.t_end_s > record.cache_ttl_s):
+            record.ttl_inference = "probable_expiry"
+        elif record.cache_ttl_s is not None:
+            record.ttl_inference = "no_expiry_signal"
+        previous[key] = record
+    return records
 
 
 def _tool_cmds_from_transcript(transcript_path) -> dict:
@@ -314,11 +472,17 @@ def import_otel(logs_path: str | Path, *, run_id: str = "", n_passed=None, n_tot
     traj.milestones = milestones
     traj.rounds = [RoundBoundary(index=0, t_start_s=0.0, t_end_s=dur_s,
                                  input_tokens=totals["input"], output_tokens=totals["output"],
-                                 cache_tokens=totals["cache"], cost_usd=totals["cost"])]
+                                 cache_tokens=totals["cache"],
+                                 cache_read_tokens=totals["cache_read"],
+                                 cache_creation_tokens=totals["cache_creation"],
+                                 cost_usd=totals["cost"])]
+    traj.inferences = inference_records_from_otel(events)
     traj.duration_s = dur_s          # plain field (active wall); consumers read it directly
     traj.num_rounds = 1
     traj.final_input_tokens = totals["input"]
     traj.final_output_tokens = totals["output"]
     traj.final_cache_tokens = totals["cache"]
+    traj.final_cache_read_tokens = totals["cache_read"]
+    traj.final_cache_creation_tokens = totals["cache_creation"]
     traj.final_cost_usd = totals["cost"]
     return traj

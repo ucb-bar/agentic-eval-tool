@@ -5,10 +5,19 @@ All notable changes to `aet` are recorded here.
 ## [Unreleased]
 
 ### Changed
+- **OTel cache accounting is subset-safe** — cache writes no longer inflate fresh input; cache
+  reads/writes, reasoning, and cost reconcile independently across logs and trace spans.
 - **`billing.METERED_PROVIDERS` now lists canonical `openai`** — an OpenAI API-key row (the metered
   Codex path) was previously classified as `subscription` and silently dropped from reported spend.
 
 ### Added
+- **Chia agent profiles + trajectory schema 1.3** — `aet import --source chia` consumes Chia's
+  privacy-safe profiler JSONL into first-class `InferenceRecord` attempts with agent/parent
+  hierarchy, retries, provider/model, split cache tokens, reasoning, and cost provenance. OTel logs
+  and traces feed the same records and deduplicate by request/span identity. `aet plot --kind
+  agent-profiles` writes PNG/SVG plus per-request CSV and per-agent JSON; context occupancy and TTL
+  expiry are explicitly labelled derived/inferred, never physical KV-cache measurements. Schema
+  1.2 trajectories remain loadable unchanged.
 - **Codex-CLI importer + live recorder (`aet import --format codex`)** — ingests a
   `codex exec --json` stdout JSONL stream (verified against codex-cli 0.147.0) into a canonical
   `RunTrajectory`. `aet.trajectory.codex` is a lossless, **structural** normalizer (dispatch on the

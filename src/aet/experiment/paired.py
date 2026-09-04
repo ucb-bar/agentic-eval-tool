@@ -13,7 +13,7 @@ paired rather than how many were requested.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from aet.core.metrics import kaplan_meier, paired_bootstrap_ci, wilcoxon_signed_rank
 

@@ -87,7 +87,7 @@ def _cmd_plot(args) -> None:
             from aet.viz.trajectory_plot import plot_trajectory, plot_comparison
         else:
             from aet.viz.comparison import (
-                plot_rate_panels, plot_cost_vs_time, plot_tests_facets,
+                plot_agent_profiles, plot_rate_panels, plot_cost_vs_time, plot_tests_facets,
             )
     except ImportError as e:
         print(f"[aet] {e}", file=sys.stderr)
@@ -111,6 +111,8 @@ def _cmd_plot(args) -> None:
 
     if kind == "rate-panels":
         fig = plot_rate_panels(trajs, labels, split_cache=split_cache)
+    elif kind == "agent-profiles":
+        fig = plot_agent_profiles(trajs, labels)
     elif kind == "cost-vs-time":
         fig = plot_cost_vs_time(trajs, labels)
     elif kind == "tests-facets":
@@ -125,6 +127,12 @@ def _cmd_plot(args) -> None:
     out = Path(args.out) if args.out else Path(args.run).with_suffix(f".{kind}.png")
     for p in _save_fig(fig, out, args.dpi):
         print(f"[aet] wrote {p}")
+    if kind == "agent-profiles":
+        from aet.trajectory.export import export_agent_profiles
+
+        csv_path, json_path = export_agent_profiles(main_traj, out.with_suffix(""))
+        print(f"[aet] wrote {csv_path}")
+        print(f"[aet] wrote {json_path}")
 
 
 
@@ -307,4 +315,3 @@ def _cmd_monitor(args) -> None:
             print(f"[aet] wrote plot {args.plot}")
         except ImportError as e:
             print(f"[aet] {e}", file=sys.stderr)
-

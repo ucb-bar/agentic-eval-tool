@@ -60,7 +60,7 @@ def test_roundtrip_json_stable(tmp_path):
     p = traj.to_json(tmp_path / "trajectory.json")
     reloaded = RunTrajectory.from_json(p)
     assert reloaded.to_dict() == traj.to_dict()
-    assert reloaded.schema_version == "1.2"
+    assert reloaded.schema_version == "1.3"
 
 
 # ---------------------------------------------------------------- cost: nullable + provenance

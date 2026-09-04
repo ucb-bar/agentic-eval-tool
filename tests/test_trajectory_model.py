@@ -1,7 +1,7 @@
 """RunTrajectory data-model: construction, derived views, and round-trip serialization."""
 from aet.trajectory.model import (
-    CHECKPOINT_KINDS, ActivityBand, Checkpoint, RoundBoundary, RunTrajectory, TestMilestone,
-    TrajectoryPoint,
+    CHECKPOINT_KINDS, ActivityBand, Checkpoint, InferenceRecord, RoundBoundary,
+    RunTrajectory, TestMilestone, TrajectoryPoint,
 )
 
 
@@ -44,6 +44,31 @@ def test_dict_round_trip_is_lossless():
     assert back.to_dict() == t.to_dict()
     assert back.run_id == "rb_test"
     assert len(back.points) == 2 and len(back.milestones) == 2 and len(back.rounds) == 2
+
+
+def test_v12_trajectory_loads_without_inferences():
+    data = _sample().to_dict()
+    data["schema_version"] = "1.2"
+    data.pop("inferences")
+    loaded = RunTrajectory.from_dict(data)
+    assert loaded.schema_version == "1.2"
+    assert loaded.inferences == []
+
+
+def test_inference_subset_arithmetic_and_agent_rollup():
+    record = InferenceRecord(
+        request_id="r", t_start_s=0, t_end_s=2, agent_id="child", parent_agent_id="root",
+        input_tokens=10, cache_read_tokens=80, cache_write_tokens=10,
+        output_tokens=20, reasoning_tokens=5, context_window_tokens=200,
+        estimated_context_tokens=100,
+    )
+    traj = RunTrajectory(inferences=[record])
+    assert record.billed_input_tokens == 100
+    assert record.cache_hit_ratio == 0.8
+    assert record.context_occupancy_ratio == 0.5
+    rollup = traj.per_agent_rollup()["child"]
+    assert rollup["reasoning_tokens"] == 5
+    assert rollup["activity_share"] == 1.0
 
 
 def test_json_round_trip(tmp_path):

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from aet.trajectory.importers.otel import (
-    build_from_otel_events, parse_otel_logs, import_otel, activity_breakdown,
+    activity_breakdown, build_from_otel_events, inference_records_from_otel, parse_otel_logs,
 )
 from aet.viz.trajectory_plot import activity_share, ACTS
 
@@ -41,7 +41,8 @@ def _events():
     ]
 
 
-AUTH = {"input": 710, "output": 1200, "cache": 30000, "cost": 0.90}  # sums of the api_request fields
+AUTH = {"input": 510, "output": 1200, "cache": 30200,
+        "cache_read": 30000, "cache_creation": 200, "cost": 0.90}
 
 
 class TestOtelTokens:
@@ -51,9 +52,11 @@ class TestOtelTokens:
 
     def test_curves_cumulative_and_end_at_totals(self):
         pts, *_ = build_from_otel_events(_events())
-        assert round(pts[-1].cum_input_tokens) == 710
+        assert round(pts[-1].cum_input_tokens) == 510
         assert round(pts[-1].cum_output_tokens) == 1200
-        assert round(pts[-1].cum_cache_tokens) == 30000
+        assert round(pts[-1].cum_cache_tokens) == 30200
+        assert round(pts[-1].cum_cache_read_tokens) == 30000
+        assert round(pts[-1].cum_cache_creation_tokens) == 200
         assert abs(pts[-1].cum_cost_usd - 0.90) < 1e-6
         for a, b in zip(pts, pts[1:]):
             assert b.cum_input_tokens >= a.cum_input_tokens
@@ -125,7 +128,6 @@ class TestOtelActivity:
         assert abs(bd.get("bash", 0) - 9.0) < 1e-6   # the long ls → ordinary shell
 
     def test_activity_share_wellformed(self):
-        traj = import_otel.__wrapped__ if hasattr(import_otel, "__wrapped__") else None
         pts, bands, totals, dur, ms = build_from_otel_events(_events())
         from aet.trajectory.model import RunTrajectory
         tr = RunTrajectory(run_id="t", source="test")
@@ -161,6 +163,33 @@ class TestOtelParse:
 
     def test_empty_returns_none(self):
         assert build_from_otel_events([]) is None
+
+    def test_inference_records_deduplicate_log_and_span_identity(self):
+        events = _events()
+        events[0]["attrs"].update({"request_id": "r1", "span_id": "s1", "agent_id": "a"})
+        duplicate = {**events[0], "seq": 99, "attrs": dict(events[0]["attrs"])}
+        records = inference_records_from_otel(events + [duplicate])
+        assert len(records) == 3
+        assert records[0].request_id == "r1"
+        assert records[0].agent_id == "a"
+
+    def test_parses_otlp_trace_spans(self, tmp_path):
+        span = {
+            "traceId": "trace", "spanId": "span", "name": "gen_ai.client.operation",
+            "startTimeUnixNano": "1000000000", "endTimeUnixNano": "2000000000",
+            "attributes": [
+                {"key": "gen_ai.usage.input_tokens", "value": {"intValue": 12}},
+                {"key": "gen_ai.usage.output_tokens", "value": {"intValue": 4}},
+            ],
+        }
+        env = {"kind": "traces", "payload": {"resourceSpans": [{
+            "scopeSpans": [{"spans": [span]}],
+        }]}}
+        path = tmp_path / "traces.jsonl"
+        path.write_text(json.dumps(env) + "\n")
+        records = inference_records_from_otel(parse_otel_logs(path))
+        assert len(records) == 1
+        assert records[0].trace_id == "trace" and records[0].input_tokens == 12
 
 
 class TestCostReconciliation:

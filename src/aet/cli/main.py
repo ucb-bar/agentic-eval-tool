@@ -253,7 +253,8 @@ def main() -> None:
                                "(otel_logs.jsonl from `aet otel-sink` — real per-turn tokens/cost/"
                                "duration + cache); 'codex' = Codex-CLI `codex exec --json` stdout "
                                "JSONL (per-turn input/cached/cache-write/output/reasoning tokens + "
-                               "tool spans + nullable provenanced cost); 'capsule-bench' = the "
+                               "tool spans + nullable provenanced cost); 'chia' = schema-versioned "
+                               "Chia profiler JSONL with agent hierarchy; 'capsule-bench' = the "
                                "bundled suite layout (default).")
     p_import.add_argument("--format", dest="fmt", default=None, metavar="FORMAT",
                           help="Alias for --source (spec spelling); e.g. `--format codex`.")
@@ -320,7 +321,7 @@ def main() -> None:
                         help="A run directory or a trajectory.json file")
     p_plot.add_argument("--kind", default="trajectory",
                         choices=["trajectory", "comparison", "rate-panels",
-                                 "cost-vs-time", "tests-facets"],
+                                 "cost-vs-time", "tests-facets", "agent-profiles"],
                         help="Figure kind (default: trajectory). The comparison kinds use "
                              "run + --comparison as the arm list.")
     p_plot.add_argument("--out", metavar="PNG", default=None,
