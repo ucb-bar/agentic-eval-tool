@@ -23,6 +23,8 @@ event, or kept as an ``[UNPARSED]`` line); see :func:`aet.trajectory.reconcile.r
 from __future__ import annotations
 
 import glob
+import json
+from datetime import datetime
 from pathlib import Path
 
 from aet.trajectory.classify import ActivityClassifier, ActivityConfig
@@ -46,6 +48,52 @@ def _codex_files(raw: str | Path) -> list[Path]:
         return []
     # sorted by name: a resume capture named e.g. events.0.jsonl / events.1.jsonl replays in order
     return sorted(Path(x) for x in glob.glob(str(p / "**" / "*.jsonl"), recursive=True))
+
+
+def _timestamped_files(raw: str | Path | None) -> list[Path]:
+    """Resolve timestamp sidecars without ever mixing them into the raw-event file set."""
+    if raw is None:
+        return []
+    p = Path(raw)
+    if p.is_file():
+        return [p]
+    if not p.is_dir():
+        return []
+    return sorted(Path(x) for x in glob.glob(str(p / "**" / "*.jsonl"), recursive=True))
+
+
+def _normalize(files: list[Path], timestamped: str | Path | None = None) -> CodexRun:
+    """Normalize raw files, optionally taking wall offsets from lossless timestamp sidecars.
+
+    A sidecar record is ``{"ts": <ISO-8601>, "line": <raw line>}``.  Sidecars are a timing
+    annotation for the raw stream, not another event stream: feeding both would double every turn
+    and token bucket.  Fail closed on malformed or byte-divergent sidecars so a purported real-time
+    trajectory can never quietly fall back to pseudo-time or reconcile against different bytes.
+    """
+    sidecars = _timestamped_files(timestamped)
+    if not sidecars:
+        norm = CodexNormalizer()
+        for path in files:
+            norm.feed_text(path.read_text(errors="ignore"))
+        return norm.result()
+    if len(sidecars) != len(files):
+        raise ValueError(
+            f"timestamp sidecar count ({len(sidecars)}) does not match raw file count ({len(files)})")
+
+    norm = CodexNormalizer()
+    origin: datetime | None = None
+    for raw_path, sidecar_path in zip(files, sidecars, strict=True):
+        raw_lines = raw_path.read_text(errors="ignore").splitlines()
+        records = [json.loads(line) for line in sidecar_path.read_text(errors="ignore").splitlines()
+                   if line.strip()]
+        annotated = [record.get("line") for record in records]
+        if annotated != raw_lines:
+            raise ValueError(f"timestamp sidecar does not match raw events: {sidecar_path}")
+        for record in records:
+            when = datetime.fromisoformat(str(record["ts"]))
+            origin = when if origin is None else origin
+            norm.feed_line(str(record["line"]), t_s=max((when - origin).total_seconds(), 0.0))
+    return norm.result()
 
 
 def _classifier(classifier_config, circt):
@@ -201,6 +249,7 @@ def import_codex(raw: str | Path, *,
                  billing_mode: str | None = None,
                  provider: str = "openai",
                  calculated_at: str = "",
+                 timestamped: str | Path | None = None,
                  milestone_time: str = "proportional",   # accepted for CLI uniformity; unused
                  **_ignored) -> RunTrajectory:
     """Import a Codex ``events.raw.jsonl`` (or a directory of them) into a :class:`RunTrajectory`.
@@ -214,10 +263,7 @@ def import_codex(raw: str | Path, *,
     rid = run_id or label or (Path(raw).stem if Path(raw).is_file() else Path(raw).name)
 
     # one normalizer across all files → a resume capture is a single continued thread
-    norm = CodexNormalizer()
-    for f in files:
-        norm.feed_text(f.read_text(errors="ignore"))
-    run = norm.result()
+    run = _normalize(files, timestamped)
 
     snapshot = (PriceSnapshot.load(price_snapshot) if price_snapshot
                 else PriceSnapshot.default_openai())
@@ -234,9 +280,6 @@ def import_codex(raw: str | Path, *,
 def import_codex_run(raw: str | Path, **kwargs) -> "tuple[RunTrajectory, CodexRun]":
     """Like :func:`import_codex` but also returns the raw :class:`CodexRun` (for ledgers/reconcile)."""
     files = _codex_files(raw)
-    norm = CodexNormalizer()
-    for f in files:
-        norm.feed_text(f.read_text(errors="ignore"))
-    run = norm.result()
+    run = _normalize(files, kwargs.get("timestamped"))
     traj = import_codex(raw, **kwargs)
     return traj, run

@@ -1,5 +1,6 @@
 """Codex importer → RunTrajectory: idempotency, reconciliation, nullable cost, ground truth."""
 from pathlib import Path
+import json
 
 from aet.trajectory.importers import get_importer
 from aet.trajectory.importers.codex import import_codex, import_codex_run
@@ -111,3 +112,34 @@ def test_import_directory_concatenates_resume(tmp_path):
     (tmp_path / "events.1.jsonl").write_text((FIX / "synthetic_resume.jsonl").read_text())
     traj = import_codex(tmp_path)
     assert traj.num_rounds == 3                   # 2 + 1 resumed turn, one continued thread
+
+
+def test_timestamp_sidecar_sets_real_time_without_double_counting(tmp_path):
+    raw_dir = tmp_path / "raw"
+    ts_dir = tmp_path / "timestamped"
+    raw_dir.mkdir(); ts_dir.mkdir()
+    source = FIX / "synthetic_full.jsonl"
+    raw = raw_dir / "attempt_0001.jsonl"
+    raw.write_text(source.read_text())
+    lines = raw.read_text().splitlines()
+    sidecar = ts_dir / "attempt_0001.jsonl"
+    sidecar.write_text("".join(
+        json.dumps({"ts": f"2026-08-30T00:00:{i:02d}+00:00", "line": line}) + "\n"
+        for i, line in enumerate(lines)))
+
+    traj, run = import_codex_run(raw_dir, timestamped=ts_dir)
+    assert traj.num_rounds == 2
+    assert run.raw_event_count == len(lines)
+    assert traj.duration_s > 0
+    last_completed = max(i for i, line in enumerate(lines) if '"type":"turn.completed"' in line)
+    assert traj.points[-1].t_s == last_completed
+
+
+def test_timestamp_sidecar_must_match_raw_bytes(tmp_path):
+    raw = tmp_path / "raw.jsonl"
+    sidecar = tmp_path / "timestamped.jsonl"
+    raw.write_text('{"type":"turn.started"}\n')
+    sidecar.write_text(json.dumps({"ts": "2026-08-30T00:00:00+00:00", "line": "different"}) + "\n")
+    import pytest
+    with pytest.raises(ValueError, match="does not match raw events"):
+        import_codex(raw, timestamped=sidecar)
